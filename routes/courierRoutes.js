@@ -3,10 +3,11 @@ const router = express.Router();
 const courierController = require('../controllers/courierController');
 const { authenticate, authorize } = require('../middleware/auth');
 
-// Assign kurir ke order (misal oleh admin)
-router.post('/assign', authenticate, authorize(['admin', 'owner']), courierController.assignCourier);
+// Kurir update lokasi (PATCH sesuai spec)
+router.patch('/me/location', authenticate, authorize('courier'), courierController.updateLocation);
 
-// Kurir update lokasi
-router.post('/location', authenticate, authorize('courier'), courierController.updateLocation);
+// Kurir lihat daftar tugas aktif
+router.get('/me/tasks/history', authenticate, authorize('courier'), courierController.getTaskHistory);
+router.get('/me/tasks', authenticate, authorize('courier'), courierController.getTasks);
 
 module.exports = router;

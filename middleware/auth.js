@@ -5,7 +5,7 @@ const authenticate = (req, res, next) => {
   const authHeader = req.header('Authorization');
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Akses ditolak. Token tidak ditemukan atau format salah.' });
+    return res.status(401).json({ message: 'Unauthorized' });
   }
 
   const token = authHeader.split(' ')[1];
@@ -15,7 +15,7 @@ const authenticate = (req, res, next) => {
     req.user = decoded; // Menyimpan data user (id, role) ke request
     next();
   } catch (err) {
-    res.status(401).json({ error: 'Token tidak valid.' });
+    res.status(401).json({ message: 'Unauthorized' });
   }
 };
 
@@ -27,7 +27,7 @@ const authorize = (roles = []) => {
 
   return (req, res, next) => {
     if (!req.user || (roles.length && !roles.includes(req.user.role))) {
-      return res.status(403).json({ error: 'Akses dilarang. Role Anda tidak diizinkan.' });
+      return res.status(403).json({ message: 'Forbidden' });
     }
     next();
   };

@@ -16,6 +16,8 @@ const paymentRoutes = require('./routes/paymentRoutes');
 const courierRoutes = require('./routes/courierRoutes');
 const trackingRoutes = require('./routes/trackingRoutes');
 const ratingRoutes = require('./routes/ratingRoutes');
+const profileRoutes = require('./routes/profileRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 
 // Gunakan Routes
 app.use('/auth', authRoutes);
@@ -25,9 +27,11 @@ app.use('/payments', paymentRoutes);
 app.use('/couriers', courierRoutes);
 app.use('/tracking', trackingRoutes);
 app.use('/ratings', ratingRoutes);
+app.use('/profile', profileRoutes);
+app.use('/admin', adminRoutes);
 
 app.get('/', (req, res) => {
-  res.send('API LaundryKu jalan');
+  res.json({ message: 'API LaundryKu berjalan' });
 });
 
 const PORT = process.env.PORT || 3000;
