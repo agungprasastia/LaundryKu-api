@@ -3,13 +3,13 @@ const router = express.Router();
 const authController = require('../controllers/authController');
 const { authenticate } = require('../middleware/auth');
 
-// Route untuk registrasi (public)
+// Public routes
 router.post('/register', authController.register);
-
-// Route untuk login (public)
 router.post('/login', authController.login);
 
-// Route untuk logout (butuh token)
+// Protected routes
+router.get('/profile', authenticate, authController.getProfile);
+router.patch('/profile', authenticate, authController.editProfile);
 router.post('/logout', authenticate, authController.logout);
 
 module.exports = router;

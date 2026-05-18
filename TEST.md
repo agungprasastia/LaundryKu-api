@@ -1,606 +1,319 @@
-# Panduan Testing API LaundryKu — Sesuai Spesifikasi PDF A-H
+# LaundryKu API — Panduan Testing (PDF v2)
 
-Berikut adalah **16 endpoint** API yang telah diimplementasikan sesuai spesifikasi PDF. 
-Test secara **berurutan** dari atas ke bawah karena data saling bergantung.
+## Setup
 
-> ⚠️ **Base URL:** `http://localhost:3000`
-> 
-> Setiap kali mendapat `access_token` atau `user_id`, **copy dan simpan** untuk dipakai di langkah berikutnya.
+1. Import `init.sql` ke MySQL (XAMPP):
+   ```
+   mysql -u root laundry_db < init.sql
+   ```
+2. Copy `.env.example` ke `.env` dan sesuaikan
+3. Jalankan server: `node app.js`
 
 ---
 
-## 1. REGISTER & LOGIN (Endpoint A, B, P)
+## Flow Testing Lengkap (40 Endpoint)
 
-### 1A. Register Owner — `POST /auth/register`
-- **Method:** `POST`
-- **URL:** `http://localhost:3000/auth/register`
-- **Body (JSON):**
-```json
-{
-  "name": "Bapak Owner",
-  "email": "owner@laundryku.id",
-  "password": "rahasia123",
-  "role": "owner"
-}
+### 1. AUTH — Register & Login
+
 ```
-> ✅ **Expected:** Status `201`
-> ```json
-> {
->   "message": "Register success",
->   "data": {
->     "user_id": "uuid-xxx",
->     "name": "Bapak Owner",
->     "role": "owner",
->     "access_token": "jwt-token-xxx"
->   }
-> }
-> ```
-> 📌 **Simpan:** `user_id` sebagai **Owner ID** dan `access_token` sebagai **Token Owner**
+# 1.1 Register Admin
+POST /auth/register
+{ "full_name": "Admin LaundryKu", "email": "admin@laundryku.com", "password": "admin123", "role": "admin" }
 
----
+# 1.2 Register Owner
+POST /auth/register
+{ "full_name": "Laundry Bahagia", "email": "owner@laundryku.com", "password": "owner123", "role": "owner", "address": "Jl. Mappaoddang No. 10, Makassar" }
 
-### 1B. Register Customer — `POST /auth/register`
-- **Method:** `POST`
-- **URL:** `http://localhost:3000/auth/register`
-- **Body (JSON):**
-```json
-{
-  "name": "Budi Santoso",
-  "email": "budi@laundryku.id",
-  "password": "rahasia123",
-  "role": "customer"
-}
-```
-> 📌 **Simpan:** `user_id` sebagai **Customer ID** dan `access_token` sebagai **Token Customer**
+# 1.3 Register Customer
+POST /auth/register
+{ "full_name": "Ahmad Customer", "email": "customer@laundryku.com", "password": "cust123", "role": "customer", "address": "Jl. Sultan Alauddin No. 5, Gowa", "lat": -5.2, "lng": 119.5 }
 
----
+# 1.4 Register Courier
+POST /auth/register
+{ "full_name": "Agung Prasasti", "email": "courier@laundryku.com", "password": "courier123", "role": "courier", "vehicle_name": "Honda Beat Hitam", "vehicle_plate_number": "DD 1234 AB" }
 
-### 1C. Register Courier — `POST /auth/register`
-- **Method:** `POST`
-- **URL:** `http://localhost:3000/auth/register`
-- **Body (JSON):**
-```json
-{
-  "name": "Andi Kurir",
-  "email": "andi@laundryku.id",
-  "password": "rahasia123",
-  "role": "courier"
-}
-```
-> 📌 **Simpan:** `user_id` sebagai **Courier ID** dan `access_token` sebagai **Token Courier**
+# 1.5 Login
+POST /auth/login
+{ "email": "admin@laundryku.com", "password": "admin123" }
+→ Simpan access_token untuk semua request berikutnya
 
----
+# 1.6 Get Profile
+GET /auth/profile
+Authorization: Bearer <token>
 
-### 1D. Register Admin — `POST /auth/register`
-- **Method:** `POST`
-- **URL:** `http://localhost:3000/auth/register`
-- **Body (JSON):**
-```json
-{
-  "name": "Admin Sistem",
-  "email": "admin@laundryku.id",
-  "password": "rahasia123",
-  "role": "admin"
-}
-```
-> 📌 **Simpan:** `access_token` sebagai **Token Admin**
+# 1.7 Edit Profile
+PATCH /auth/profile
+Authorization: Bearer <token>
+{ "full_name": "Admin LaundryKu Updated" }
 
----
-
-### 1E. Login — `POST /auth/login`
-- **Method:** `POST`
-- **URL:** `http://localhost:3000/auth/login`
-- **Body (JSON):**
-```json
-{
-  "email": "owner@laundryku.id",
-  "password": "rahasia123"
-}
-```
-> ✅ **Expected:** Status `200`
-> ```json
-> {
->   "message": "Login success",
->   "data": {
->     "user_id": "uuid-xxx",
->     "name": "Bapak Owner",
->     "role": "owner",
->     "access_token": "jwt-token-xxx"
->   }
-> }
-> ```
-
-**Test Error — Password Salah:**
-```json
-{
-  "email": "owner@laundryku.id",
-  "password": "salah123"
-}
-```
-> ❌ **Expected:** Status `401` → `{ "message": "Invalid email or password" }`
-
----
-
-### 1F. Logout — `POST /auth/logout`
-- **Method:** `POST`
-- **URL:** `http://localhost:3000/auth/logout`
-- **Headers:** `Authorization: Bearer <Token Owner>`
-> ✅ **Expected:** Status `200` → `{ "message": "Logout success" }`
-
----
-
-## 2. SETUP OWNER PROFILE
-
-Sebelum membuat layanan, owner perlu punya `shop_name` di `owner_profiles`. 
-Update langsung via MySQL/phpMyAdmin:
-
-```sql
-UPDATE owner_profiles 
-SET shop_name = 'Laundry Bersih Jaya', 
-    shop_address = 'Jl. Kedungdoro No. 45, Surabaya', 
-    city = 'Surabaya'
-WHERE user_id = '<Owner ID>';
-```
-> Ganti `<Owner ID>` dengan UUID owner dari langkah 1A.
-
----
-
-## 3. SERVICES — Layanan Laundry (Endpoint C, D)
-
-### 3A. Buat Layanan — `POST /services` (Owner)
-- **Method:** `POST`
-- **URL:** `http://localhost:3000/services`
-- **Headers:** `Authorization: Bearer <Token Owner>`
-- **Body (JSON):**
-```json
-{
-  "name": "Cuci Reguler",
-  "description": "Layanan cuci dan lipat pakaian harian",
-  "price_per_kg": 7000,
-  "minimum_kg": 2,
-  "estimated_days": 2
-}
-```
-> ✅ **Expected:** Status `201`
-> 📌 **Simpan:** `service_id` dari response
-
----
-
-### 3B. Daftar Semua Layanan — `GET /services` (Public)
-- **Method:** `GET`
-- **URL:** `http://localhost:3000/services`
-
-**Dengan filter/pagination:**
-- `http://localhost:3000/services?page=1&limit=10`
-- `http://localhost:3000/services?keyword=cuci`
-- `http://localhost:3000/services?owner_id=<Owner ID>`
-
-> ✅ **Expected:** Status `200`
-> ```json
-> {
->   "message": "Success",
->   "data": [
->     {
->       "service_id": "uuid-xxx",
->       "shop_name": "Laundry Bersih Jaya",
->       "service_name": "Cuci Reguler",
->       "price_per_kg": 7000,
->       "estimated_days": 2
->     }
->   ],
->   "pagination": { "page": 1, "limit": 10, "total": 1 }
-> }
-> ```
-
----
-
-### 3C. Detail Layanan — `GET /services/:id` (Public)
-- **Method:** `GET`
-- **URL:** `http://localhost:3000/services/<service_id>`
-
-> ✅ **Expected:** Status `200` — termasuk `shop_name`, `address`, `minimum_kg`, `description`
-
-**Test Error — Service tidak ada:**
-- **URL:** `http://localhost:3000/services/tidak-ada-id`
-> ❌ **Expected:** Status `404` → `{ "message": "Service not found" }`
-
----
-
-## 4. ORDERS — Pemesanan (Endpoint E, H, I)
-
-### 4A. Buat Pesanan — `POST /orders` (Customer)
-- **Method:** `POST`
-- **URL:** `http://localhost:3000/orders`
-- **Headers:** `Authorization: Bearer <Token Customer>`
-- **Body (JSON):**
-```json
-{
-  "service_id": "<service_id dari langkah 3A>",
-  "pickup_address": "Jl. Raya Darmo No. 12, Surabaya",
-  "pickup_lat": -7.2893,
-  "pickup_lng": 112.7384,
-  "pickup_scheduled_at": "2026-05-15T09:00:00Z"
-}
-```
-> ✅ **Expected:** Status `201`
-> ```json
-> {
->   "message": "Order created",
->   "data": {
->     "order_id": "uuid-xxx",
->     "invoice_id": "uuid-xxx",
->     "invoice_number": "INV/2026/05/001",
->     "amount": 0,
->     "status": "pending_payment",
->     "pickup_scheduled_at": "2026-05-15T09:00:00Z"
->   }
-> }
-> ```
-> 📌 **Simpan:** `order_id` dan `invoice_id`
-
-**Test Error — Order duplikat:**
-Kirim request yang sama lagi.
-> ❌ **Expected:** Status `409` → `{ "message": "Customer already has an active order at this laundry" }`
-
----
-
-### 4B. Pesanan Saya — `GET /orders/my-orders` (Customer)
-- **Method:** `GET`
-- **URL:** `http://localhost:3000/orders/my-orders`
-- **Headers:** `Authorization: Bearer <Token Customer>`
-
-**Dengan filter:**
-- `http://localhost:3000/orders/my-orders?status=active&page=1&limit=10`
-
-> ✅ **Expected:** Status `200` — daftar order dengan pagination, termasuk `shop_name` dan `service_name`
-
----
-
-### 4C. Detail Order — `GET /orders/:id`
-- **Method:** `GET`
-- **URL:** `http://localhost:3000/orders/<order_id>`
-- **Headers:** `Authorization: Bearer <Token Customer>`
-
----
-
-## 5. PAYMENTS — Pembayaran (Endpoint F, G)
-
-### 5A. Buat Pembayaran — `POST /payments` (Customer)
-- **Method:** `POST`
-- **URL:** `http://localhost:3000/payments`
-- **Headers:** `Authorization: Bearer <Token Customer>`
-- **Body (JSON):**
-```json
-{
-  "invoice_id": "<invoice_id dari langkah 4A>",
-  "payment_method": "virtual_account"
-}
-```
-> ✅ **Expected:** Status `201`
-> ```json
-> {
->   "message": "Payment created",
->   "data": {
->     "payment_id": "uuid-xxx",
->     "invoice_id": "uuid-xxx",
->     "amount": 0,
->     "payment_method": "virtual_account",
->     "virtual_account_number": "880812345678",
->     "expired_at": "2026-05-11T...",
->     "status": "pending"
->   }
-> }
-> ```
-
-**Test Error — Invoice sudah bayar (setelah callback):**
-> ❌ **Expected:** Status `400` → `{ "message": "Invoice already paid" }`
-
----
-
-### 5B. Simulasi Callback Payment — `POST /payments/callback`
-- **Method:** `POST`
-- **URL:** `http://localhost:3000/payments/callback`
-- **Headers:** `X-Signature: test-signature-123`
-- **Body (JSON):**
-```json
-{
-  "invoice_id": "<invoice_id>",
-  "status": "paid",
-  "paid_at": "2026-05-10T10:15:00Z",
-  "reference_no": "PG-88990011",
-  "signature": "abc123signature"
-}
-```
-> ✅ **Expected:** Status `200` → `{ "message": "Callback processed" }`
-> 
-> **Side effects (cek di database):**
-> - `payments.status` → `paid`
-> - `invoices.status` → `paid`
-> - `orders.status` → `confirmed`
-> - 2 notifikasi dibuat (customer + owner)
-
-**Test Error — Signature kosong (hapus header dan field signature):**
-> ❌ **Expected:** Status `403` → `{ "message": "Invalid signature" }`
-
-**Test Error — Status tidak valid:**
-```json
-{
-  "invoice_id": "<invoice_id>",
-  "status": "unknown_status",
-  "signature": "abc123"
-}
-```
-> ❌ **Expected:** Status `400` → `{ "message": "Invalid payment status" }`
-
----
-
-## 6. ORDER STATUS — Update oleh Owner (Endpoint I)
-
-### 6A. Update Status → washing — `PATCH /orders/:order_id/status`
-- **Method:** `PATCH`
-- **URL:** `http://localhost:3000/orders/<order_id>/status`
-- **Headers:** `Authorization: Bearer <Token Owner>`
-- **Body (JSON):**
-```json
-{
-  "status": "washing",
-  "notes": "Laundry sedang dicuci"
-}
-```
-> ✅ **Expected:** Status `200`
-> ```json
-> {
->   "message": "Status updated",
->   "data": {
->     "order_id": "uuid-xxx",
->     "status": "washing",
->     "updated_at": "2026-05-10T..."
->   }
-> }
-> ```
-
-### 6B. Update Status → drying
-```json
-{ "status": "drying", "notes": "Sedang dikeringkan" }
+# 1.8 Logout
+POST /auth/logout
+Authorization: Bearer <token>
 ```
 
-### 6C. Update Status → finished
-```json
-{ "status": "finished", "notes": "Laundry selesai" }
+### 2. ADMIN — Verifikasi & Wallet Setup
+
+```
+# Login sebagai Admin terlebih dahulu
+# Buat wallet admin manual:
+# INSERT INTO wallets (user_id, role) VALUES (<admin_id>, 'admin');
+
+# 2.1 Verifikasi Owner (otomatis buat wallet)
+PATCH /admin/users/<owner_id>/verify
+Authorization: Bearer <admin_token>
+{ "is_verified": true }
+
+# 2.2 Verifikasi Courier (otomatis buat wallet)
+PATCH /admin/users/<courier_id>/verify
+Authorization: Bearer <admin_token>
+{ "is_verified": true }
 ```
 
-**Test Error — Bukan owner dari order:**
-Gunakan token user lain.
-> ❌ **Expected:** Status `403` → `{ "message": "Forbidden" }`
+### 3. SERVICES — CRUD Layanan
 
----
-
-## 7. COURIER — Assign & Tugas (Endpoint K, J, M, L)
-
-### 7A. Assign Kurir — `POST /orders/:order_id/assign-courier` (Owner)
-- **Method:** `POST`
-- **URL:** `http://localhost:3000/orders/<order_id>/assign-courier`
-- **Headers:** `Authorization: Bearer <Token Owner>`
-- **Body (JSON):**
-```json
-{
-  "courier_id": "<Courier ID dari langkah 1C>",
-  "task_type": "pickup"
-}
 ```
-> ✅ **Expected:** Status `201`
-> ```json
-> {
->   "message": "Courier assigned successfully",
->   "data": {
->     "assignment_id": "uuid-xxx",
->     "order_id": "uuid-xxx",
->     "courier_id": "uuid-xxx",
->     "task_type": "pickup",
->     "status": "assigned",
->     "assigned_at": "2026-05-10T..."
->   }
-> }
-> ```
-> 📌 **Simpan:** `assignment_id`
+# Login sebagai Owner
 
-**Test Error — Duplikat assignment:**
-Kirim request yang sama lagi.
-> ❌ **Expected:** Status `409` → `{ "message": "Courier already assigned for this task" }`
+# 3.1 Create Service
+POST /services
+Authorization: Bearer <owner_token>
+{ "service_id": "SVC001", "name": "Cuci & Setrika", "description": "Cuci bersih dan setrika rapi", "price_per_kg_owner": 7000 }
+→ Cek price_per_kg_customer = 8050 (7000 × 1.15)
 
-**Test Error — task_type tidak valid:**
-```json
-{ "courier_id": "<id>", "task_type": "invalid" }
-```
-> ❌ **Expected:** Status `422` → Validation error
+# 3.2 Create Service 2
+POST /services
+Authorization: Bearer <owner_token>
+{ "service_id": "SVC002", "name": "Dry Clean", "description": "Dry cleaning premium", "price_per_kg_owner": 15000 }
 
----
+# 3.3 Get All Services
+GET /services
+Authorization: Bearer <any_token>
 
-### 7B. Update Lokasi Kurir — `PATCH /couriers/me/location` (Courier)
-- **Method:** `PATCH`
-- **URL:** `http://localhost:3000/couriers/me/location`
-- **Headers:** `Authorization: Bearer <Token Courier>`
-- **Body (JSON):**
-```json
-{
-  "lat": -7.2804,
-  "lng": 112.7457,
-  "assignment_id": "<assignment_id dari 7A>"
-}
-```
-> ✅ **Expected:** Status `200`
-> ```json
-> {
->   "message": "Location updated",
->   "data": {
->     "courier_id": "uuid-xxx",
->     "lat": -7.2804,
->     "lng": 112.7457,
->     "recorded_at": "2026-05-10T..."
->   }
-> }
-> ```
+# 3.4 Get Service Detail
+GET /services/SVC001
+Authorization: Bearer <any_token>
 
----
+# 3.5 Update Service
+PATCH /services/SVC001
+Authorization: Bearer <owner_token>
+{ "price_per_kg_owner": 8000 }
 
-### 7C. Daftar Tugas Kurir — `GET /couriers/me/tasks` (Courier)
-- **Method:** `GET`
-- **URL:** `http://localhost:3000/couriers/me/tasks`
-- **Headers:** `Authorization: Bearer <Token Courier>`
-
-**Dengan filter:**
-- `http://localhost:3000/couriers/me/tasks?status=active&page=1&limit=10`
-
-> ✅ **Expected:** Status `200` — daftar tugas dengan `customer_name`, `customer_phone`, `pickup_address`
-
----
-
-### 7D. History Tugas Kurir — `GET /couriers/me/tasks/history` (Courier)
-- **Method:** `GET`
-- **URL:** `http://localhost:3000/couriers/me/tasks/history`
-- **Headers:** `Authorization: Bearer <Token Courier>`
-
-**Dengan filter tanggal:**
-- `http://localhost:3000/couriers/me/tasks/history?date_from=2026-05-01&date_to=2026-05-31&page=1&limit=10`
-
-> ✅ **Expected:** Status `200` — daftar tugas selesai (status `done`) dengan `completed_at`
-> ⚠️ **Catatan:** Hasilnya akan kosong sampai ada tugas yang statusnya `done`
-
----
-
-## 8. TRACKING (Tambahan)
-
-### 8A. Tracking Order — `GET /tracking/:order_id`
-- **Method:** `GET`
-- **URL:** `http://localhost:3000/tracking/<order_id>`
-- **Headers:** `Authorization: Bearer <Token Customer>`
-
-> ✅ **Expected:** Status `200` — posisi terakhir kurir (dari langkah 7B)
-
----
-
-## 9. PROFILE (Endpoint O)
-
-### 9A. Lihat Profil — `GET /profile`
-- **Method:** `GET`
-- **URL:** `http://localhost:3000/profile`
-- **Headers:** `Authorization: Bearer <Token mana saja>`
-
-> ✅ **Expected:** Status `200`
-> ```json
-> {
->   "message": "Profile retrieved successfully",
->   "data": {
->     "id": "uuid-xxx",
->     "name": "Bapak Owner",
->     "email": "owner@laundryku.id",
->     "role": "owner",
->     "phone": null,
->     "created_at": "2026-05-10T..."
->   }
-> }
-> ```
-
-**Test Error — Tanpa token:**
-Jangan kirim header Authorization.
-> ❌ **Expected:** Status `401` → `{ "message": "Unauthorized" }`
-
----
-
-## 10. ADMIN DASHBOARD (Endpoint N)
-
-### 10A. Dashboard Metrics — `GET /admin/dashboard/metrics` (Admin Only)
-- **Method:** `GET`
-- **URL:** `http://localhost:3000/admin/dashboard/metrics?date_from=2026-05-01&date_to=2026-05-31`
-- **Headers:** `Authorization: Bearer <Token Admin>`
-
-> ✅ **Expected:** Status `200`
-> ```json
-> {
->   "message": "Success",
->   "data": {
->     "total_users": 4,
->     "new_users_this_period": 4,
->     "total_orders": 1,
->     "orders_this_period": 1,
->     "total_revenue": 0,
->     "revenue_this_period": 0,
->     "active_couriers": 1,
->     "active_owners": 1,
->     "order_status_summary": {
->       "pending_payment": 0,
->       "confirmed": 1,
->       "washing": 0,
->       "delivering": 0,
->       "completed": 0
->     }
->   }
-> }
-> ```
-
-**Test Error — Bukan admin:**
-Gunakan Token Customer/Owner.
-> ❌ **Expected:** Status `403` → `{ "message": "Forbidden" }`
-
----
-
-## 11. RATINGS (Tambahan)
-
-### 11A. Update Status → completed dulu (Owner)
-- **Method:** `PATCH`
-- **URL:** `http://localhost:3000/orders/<order_id>/status`
-- **Headers:** `Authorization: Bearer <Token Owner>`
-- **Body:**
-```json
-{ "status": "completed", "notes": "Laundry selesai dan sudah diterima customer" }
+# 3.6 Delete Service
+DELETE /services/SVC002
+Authorization: Bearer <owner_token>
 ```
 
-### 11B. Berikan Rating — `POST /ratings` (Customer)
-- **Method:** `POST`
-- **URL:** `http://localhost:3000/ratings`
-- **Headers:** `Authorization: Bearer <Token Customer>`
-- **Body (JSON):**
-```json
-{
-  "order_id": "<order_id>",
-  "score": 5,
-  "review": "Pelayanan sangat memuaskan, laundry bersih dan wangi!"
-}
+### 4. ORDERS — Alur Pesanan
+
 ```
-> ✅ **Expected:** Status `201`
-> ```json
-> {
->   "message": "Rating created",
->   "data": {
->     "rating_id": "uuid-xxx",
->     "order_id": "uuid-xxx",
->     "customer_id": "uuid-xxx",
->     "score": 5,
->     "review": "Pelayanan sangat memuaskan, laundry bersih dan wangi!"
->   }
-> }
-> ```
+# Login sebagai Customer
 
----
+# 4.1 Create Order
+POST /orders
+Authorization: Bearer <customer_token>
+{ "service_id": "SVC001", "pickup_address": "Jl. Sultan Alauddin No. 5, Gowa", "pickup_lat": -5.2, "pickup_lng": 119.5 }
+→ Simpan order_id dan invoice_id
 
-## Ringkasan 16 Endpoint
+# 4.2 Get My Orders
+GET /orders/my-orders
+Authorization: Bearer <customer_token>
 
-| # | Spec | Method | URL | Auth |
-|---|------|--------|-----|------|
-| 1 | A | `POST` | `/auth/register` | Public |
-| 2 | B | `POST` | `/auth/login` | Public |
-| 3 | P | `POST` | `/auth/logout` | Bearer |
-| 4 | C | `GET` | `/services` | Public |
-| 5 | D | `GET` | `/services/:id` | Public |
-| 6 | E | `POST` | `/orders` | Customer |
-| 7 | H | `GET` | `/orders/my-orders` | Bearer |
-| 8 | — | `GET` | `/orders/:id` | Bearer |
-| 9 | I | `PATCH` | `/orders/:order_id/status` | Owner |
-| 10 | K | `POST` | `/orders/:order_id/assign-courier` | Owner |
-| 11 | F | `POST` | `/payments` | Bearer |
-| 12 | G | `POST` | `/payments/callback` | X-Signature |
-| 13 | J | `PATCH` | `/couriers/me/location` | Courier |
-| 14 | M | `GET` | `/couriers/me/tasks` | Courier |
-| 15 | L | `GET` | `/couriers/me/tasks/history` | Courier |
-| 16 | O | `GET` | `/profile` | Bearer |
-| 17 | N | `GET` | `/admin/dashboard/metrics` | Admin |
+# Login sebagai Owner
+
+# 4.3 Update Status → CONFIRMED
+PATCH /orders/<order_id>/status
+Authorization: Bearer <owner_token>
+{ "status": "CONFIRMED" }
+
+# 4.4 Assign Courier (courier locking)
+POST /orders/<order_id>/assign-courier
+Authorization: Bearer <owner_token>
+{ "courier_id": <courier_user_id> }
+→ Simpan assignment_id
+
+# 4.5 Input Berat (auto kalkulasi biaya)
+PATCH /orders/<order_id>/weight
+Authorization: Bearer <owner_token>
+{ "weight_kg": 3.5 }
+→ Cek: service_fee, delivery_fee, admin_commission, owner_earning, courier_earning, total_amount
+
+# 4.6 Get Order Detail
+GET /orders/<order_id>
+Authorization: Bearer <any_token>
+```
+
+### 5. COURIER — Pickup Phase
+
+```
+# Login sebagai Courier
+
+# 5.1 Update Task Status → PICKUP_ON_THE_WAY
+PATCH /couriers/tasks/<assignment_id>/status
+Authorization: Bearer <courier_token>
+{ "status": "PICKUP_ON_THE_WAY" }
+→ Order status juga berubah ke PICKUP_ON_THE_WAY
+
+# 5.2 Update Lokasi
+PATCH /couriers/me/location
+Authorization: Bearer <courier_token>
+{ "lat": -5.185, "lng": 119.462, "assignment_id": "<assignment_id>" }
+
+# 5.3 Update Task Status → LAUNDRY_PICKED
+PATCH /couriers/tasks/<assignment_id>/status
+Authorization: Bearer <courier_token>
+{ "status": "LAUNDRY_PICKED" }
+→ Order status → LAUNDRY_PICKED
+
+# 5.4 Get Active Tasks
+GET /couriers/me/tasks
+Authorization: Bearer <courier_token>
+```
+
+### 6. OWNER — Processing & Delivery
+
+```
+# Login sebagai Owner
+
+# 6.1 Update Status → PROCESSING
+PATCH /orders/<order_id>/status
+Authorization: Bearer <owner_token>
+{ "status": "PROCESSING" }
+
+# 6.2 Update Status → READY_FOR_DELIVERY
+PATCH /orders/<order_id>/status
+Authorization: Bearer <owner_token>
+{ "status": "READY_FOR_DELIVERY" }
+
+# 6.3 Aktifkan Fase Delivery (switch courier phase)
+PATCH /orders/<order_id>/activate-delivery
+Authorization: Bearer <owner_token>
+```
+
+### 7. PAYMENTS — Invoice & Pembayaran
+
+```
+# Login sebagai Customer
+
+# 7.1 Lihat Invoice
+GET /payments/invoice/<invoice_id>
+Authorization: Bearer <customer_token>
+
+# 7.2 Bayar Invoice
+POST /payments
+Authorization: Bearer <customer_token>
+{ "invoice_id": "<invoice_id>", "payment_method": "virtual_account" }
+→ Simpan payment_id
+
+# 7.3 Simulasi Callback (tanpa auth)
+POST /payments/callback
+{ "payment_id": "<payment_id>", "status": "success" }
+→ Saldo didistribusikan ke pending balance
+```
+
+### 8. COURIER — Delivery Phase
+
+```
+# Login sebagai Courier
+
+# 8.1 Update Task Status → DELIVERY_ON_THE_WAY
+PATCH /couriers/tasks/<assignment_id>/status
+Authorization: Bearer <courier_token>
+{ "status": "DELIVERY_ON_THE_WAY" }
+
+# 8.2 Track Order (sebagai Customer)
+GET /orders/<order_id>/tracking
+Authorization: Bearer <customer_token>
+
+# 8.3 Update Task Status → DELIVERED
+PATCH /couriers/tasks/<assignment_id>/status
+Authorization: Bearer <courier_token>
+{ "status": "DELIVERED" }
+
+# 8.4 Update Task Status → DONE (→ Order = DELIVERED)
+PATCH /couriers/tasks/<assignment_id>/status
+Authorization: Bearer <courier_token>
+{ "status": "DONE" }
+```
+
+### 9. CUSTOMER — Konfirmasi Selesai
+
+```
+# 9.1 Complete Order (release pending → available balance)
+PATCH /orders/<order_id>/complete
+Authorization: Bearer <customer_token>
+→ Saldo owner & kurir dirilis ke available_balance
+```
+
+### 10. WALLETS
+
+```
+# Login sebagai Owner/Courier
+
+# 10.1 Lihat Saldo
+GET /wallets/me
+Authorization: Bearer <owner_token>
+
+# 10.2 Riwayat Transaksi
+GET /wallets/me/transactions?page=1&limit=10
+Authorization: Bearer <owner_token>
+
+# 10.3 Withdraw
+POST /wallets/me/withdraw
+Authorization: Bearer <owner_token>
+{ "amount": 24500, "bank_account_number": "1234567890", "bank_name": "BCA" }
+
+# 10.4 Riwayat Withdraw
+GET /wallets/me/withdrawals
+Authorization: Bearer <owner_token>
+```
+
+### 11. ADMIN — Proses Withdraw & Analytics
+
+```
+# Login sebagai Admin
+
+# 11.1 Proses Withdraw
+PATCH /admin/wallets/withdrawals/<withdraw_id>/process
+Authorization: Bearer <admin_token>
+{ "status": "success", "note": "Transfer berhasil via BCA" }
+
+# 11.2 Lihat Wallet Admin
+GET /admin/wallets/me
+Authorization: Bearer <admin_token>
+
+# 11.3 Dashboard Metrics
+GET /admin/dashboard/metrics?date_from=2026-01-01&date_to=2026-12-31
+Authorization: Bearer <admin_token>
+
+# 11.4 Admin Analytics
+GET /admin/analytics?date_from=2026-01-01&date_to=2026-12-31
+Authorization: Bearer <admin_token>
+```
+
+### 12. NOTIFICATIONS
+
+```
+# 12.1 Get Notifications
+GET /notifications
+Authorization: Bearer <any_token>
+
+# 12.2 Mark as Read
+PATCH /notifications/<notification_id>/read
+Authorization: Bearer <any_token>
+```
+
+### 13. REPORTS
+
+```
+# 13.1 Owner Report Summary
+GET /owner/reports/summary?date_from=2026-01-01&date_to=2026-12-31
+Authorization: Bearer <owner_token>
+
+# 13.2 Courier Earnings
+GET /couriers/me/earnings?date_from=2026-01-01&date_to=2026-12-31
+Authorization: Bearer <courier_token>
+
+# 13.3 Customer Order History
+GET /orders/my-orders/history?page=1&limit=20
+Authorization: Bearer <customer_token>
+```

@@ -1,13 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const paymentController = require('../controllers/paymentController');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, authorize } = require('../middleware/auth');
 
-// Customer membuat inisiasi pembayaran
-router.post('/', authenticate, paymentController.createPayment);
+// Lihat invoice (customer)
+router.get('/invoice/:invoice_id', authenticate, authorize('customer'), paymentController.getInvoice);
 
-// Endpoint callback (umumnya tidak pakai auth login biasa, tapi pakai signature verifikasi dari Payment Gateway)
-// Untuk simulasi ini kita biarkan tanpa auth khusus
+// Bayar invoice (customer)
+router.post('/', authenticate, authorize('customer'), paymentController.createPayment);
+
+// Payment callback (dari gateway, tanpa auth)
 router.post('/callback', paymentController.paymentCallback);
 
 module.exports = router;

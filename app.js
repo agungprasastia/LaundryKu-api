@@ -14,21 +14,21 @@ const serviceRoutes = require('./routes/serviceRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const courierRoutes = require('./routes/courierRoutes');
-const trackingRoutes = require('./routes/trackingRoutes');
-const ratingRoutes = require('./routes/ratingRoutes');
-const profileRoutes = require('./routes/profileRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
+const walletRoutes = require('./routes/walletRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const ownerRoutes = require('./routes/ownerRoutes');
 
-// Gunakan Routes
+// Gunakan Routes (sesuai spec PDF v2)
 app.use('/auth', authRoutes);
 app.use('/services', serviceRoutes);
 app.use('/orders', orderRoutes);
 app.use('/payments', paymentRoutes);
 app.use('/couriers', courierRoutes);
-app.use('/tracking', trackingRoutes);
-app.use('/ratings', ratingRoutes);
-app.use('/profile', profileRoutes);
+app.use('/notifications', notificationRoutes);
+app.use('/wallets', walletRoutes);
 app.use('/admin', adminRoutes);
+app.use('/owner', ownerRoutes);
 
 app.get('/', (req, res) => {
   res.json({ message: 'API LaundryKu berjalan' });
