@@ -136,9 +136,11 @@ exports.getMyOrders = async (req, res) => {
     const total = countResult[0].total;
 
     const [orders] = await pool.query(
-      `SELECT o.order_id, o.status, s.name AS service_name, o.total_amount, o.created_at
+      `SELECT o.order_id, o.status, s.name AS service_name, o.total_amount, o.pickup_address, o.created_at,
+              i.invoice_id
        FROM orders o
        LEFT JOIN services s ON o.service_id = s.service_id
+       LEFT JOIN invoices i ON o.order_id = i.order_id
        ${whereClause}
        ORDER BY o.created_at DESC
        LIMIT ? OFFSET ?`,
@@ -218,6 +220,13 @@ exports.getOrderDetail = async (req, res) => {
       [order_id]
     );
 
+    // Ambil invoice_id
+    const [invoiceRows] = await pool.query(
+      'SELECT invoice_id FROM invoices WHERE order_id = ? LIMIT 1',
+      [order_id]
+    );
+    const invoiceId = invoiceRows.length > 0 ? invoiceRows[0].invoice_id : null;
+
     // Base response — semua role dapat ini
     const data = {
       order_id: order.order_id,
@@ -231,6 +240,7 @@ exports.getOrderDetail = async (req, res) => {
       service_fee: order.service_fee,
       delivery_fee: order.delivery_fee,
       total_amount: order.total_amount,
+      invoice_id: invoiceId,
       pickup_address: order.pickup_address,
       pickup_scheduled_at: order.pickup_scheduled_at,
       status_history: statusHistory,
