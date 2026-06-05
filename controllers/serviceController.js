@@ -5,7 +5,7 @@ const { isPositiveNumber } = require('../helpers/validators');
 // 2.1. Get All Services
 // GET /services
 // Auth: Wajib Bearer Token (semua role)
-// - Customer: hanya service yang is_active = 1
+// - Customer/courier: hanya service yang is_active = 1
 // - Owner: semua service miliknya (active/inactive)
 // - Admin: semua service
 // ============================================
@@ -15,16 +15,14 @@ exports.getAllServices = async (req, res) => {
     let params = [];
 
     if (req.user.role === 'admin') {
-      // Admin bisa lihat semua service
       query = `SELECT service_id, owner_id, name, description, price_per_kg_owner, price_per_kg_customer, is_active, created_at
                FROM services ORDER BY created_at DESC`;
     } else if (req.user.role === 'owner') {
-      // Owner hanya lihat service miliknya (termasuk inactive)
       query = `SELECT service_id, owner_id, name, description, price_per_kg_owner, price_per_kg_customer, is_active, created_at
                FROM services WHERE owner_id = ? ORDER BY created_at DESC`;
       params = [req.user.id];
     } else {
-      // Customer & courier: hanya active services
+      // Customer & courier: hanya active services, tanpa price_per_kg_owner
       query = `SELECT service_id, owner_id, name, description, price_per_kg_customer, is_active, created_at
                FROM services WHERE is_active = 1 ORDER BY created_at DESC`;
     }
@@ -46,9 +44,16 @@ exports.getAllServices = async (req, res) => {
 // 2.2. Get Service Detail
 // GET /services/:service_id
 // Auth: Wajib Bearer Token (semua role)
+// FIX:
+//   - Customer/courier: hanya active, tanpa price_per_kg_owner
+//   - Owner: hanya miliknya
+//   - Admin: semua
 // ============================================
 exports.getServiceById = async (req, res) => {
   const { service_id } = req.params;
+  const userRole = req.user.role;
+  const userId = req.user.id;
+
   try {
     const [services] = await pool.query(
       `SELECT service_id, owner_id, name, description, price_per_kg_owner, price_per_kg_customer, is_active
@@ -60,7 +65,23 @@ exports.getServiceById = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Service not found' });
     }
 
-    res.json({ success: true, message: 'Success', data: services[0] });
+    const service = services[0];
+
+    // Owner hanya bisa lihat service miliknya
+    if (userRole === 'owner' && service.owner_id !== userId) {
+      return res.status(403).json({ success: false, message: 'Forbidden: not your service' });
+    }
+
+    // Customer/courier: hanya service active
+    if (userRole === 'customer' || userRole === 'courier') {
+      if (!service.is_active) {
+        return res.status(404).json({ success: false, message: 'Service not found' });
+      }
+      // Hapus price_per_kg_owner dari response
+      delete service.price_per_kg_owner;
+    }
+
+    res.json({ success: true, message: 'Success', data: service });
   } catch (err) {
     console.error('getServiceById error:', err.message);
     res.status(500).json({ success: false, message: 'Server error' });
@@ -184,24 +205,29 @@ exports.updateService = async (req, res) => {
 };
 
 // ============================================
-// 2.5. Delete Service
+// 2.5. Delete Service (Soft Delete)
 // DELETE /services/:service_id
 // Auth: Wajib Bearer Token (role: owner, verified)
-// Owner hanya bisa delete service miliknya
+// FIX: Soft delete (is_active = 0), bukan hard delete
+//      Mencegah cascade delete pada orders/invoices/payments
 // ============================================
 exports.deleteService = async (req, res) => {
   const { service_id } = req.params;
   const owner_id = req.user.id;
 
   try {
-    const [services] = await pool.query('SELECT service_id FROM services WHERE service_id = ? AND owner_id = ?', [service_id, owner_id]);
+    const [services] = await pool.query('SELECT service_id, is_active FROM services WHERE service_id = ? AND owner_id = ?', [service_id, owner_id]);
     if (services.length === 0) {
       return res.status(404).json({ success: false, message: 'Service not found or not owned by you' });
     }
 
-    await pool.query('DELETE FROM services WHERE service_id = ?', [service_id]);
+    if (!services[0].is_active) {
+      return res.json({ success: true, message: 'Service already deactivated' });
+    }
 
-    res.json({ success: true, message: 'Service deleted successfully' });
+    await pool.query('UPDATE services SET is_active = 0 WHERE service_id = ?', [service_id]);
+
+    res.json({ success: true, message: 'Service deactivated (soft delete)' });
   } catch (err) {
     console.error('deleteService error:', err.message);
     res.status(500).json({ success: false, message: 'Server error' });

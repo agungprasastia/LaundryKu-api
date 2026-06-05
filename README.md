@@ -44,7 +44,11 @@ DB_PORT=3306
 JWT_SECRET=change_this_secret
 ALLOW_MANUAL_DISTANCE=true
 MIDTRANS_SERVER_KEY=SB-Mid-server-xxxxxxxxxxxxxxxxxxxxxxxx
+USE_DUMMY_PAYMENT=true
+FRONTEND_URL=http://localhost:3000
 ```
+
+> **Note**: Set `USE_DUMMY_PAYMENT=true` untuk development tanpa Midtrans key. Payment akan return dummy snap_token tanpa memanggil Midtrans API. Set ke `false` untuk menggunakan Midtrans Sandbox yang sesungguhnya.
 
 ### 3. Install Dependencies
 

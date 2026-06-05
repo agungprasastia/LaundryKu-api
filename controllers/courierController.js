@@ -55,6 +55,7 @@ exports.updateLocation = async (req, res) => {
 // 5.2. Update Status Tugas Kurir
 // PATCH /couriers/tasks/:assignment_id/status
 // Auth: Bearer Token (role: courier, verified)
+// FIX: try/catch/finally untuk connection leak
 // ============================================
 exports.updateTaskStatus = async (req, res) => {
   const { assignment_id } = req.params;
@@ -82,147 +83,126 @@ exports.updateTaskStatus = async (req, res) => {
     }
 
     const connection = await pool.getConnection();
-    await connection.beginTransaction();
+    try {
+      await connection.beginTransaction();
 
-    let phase = assignment.current_phase;
-    let orderStatusUpdate = null;
+      let phase = assignment.current_phase;
+      let orderStatusUpdate = null;
 
-    // Ambil order info untuk notifikasi
-    const [orders] = await connection.query('SELECT * FROM orders WHERE order_id = ?', [assignment.order_id]);
-    const order = orders.length > 0 ? orders[0] : null;
+      const [orders] = await connection.query('SELECT * FROM orders WHERE order_id = ?', [assignment.order_id]);
+      const order = orders.length > 0 ? orders[0] : null;
 
-    if (phase === 'pickup') {
-      // Pickup phase: PICKUP_ON_THE_WAY → LAUNDRY_PICKED
-      const validPickup = ['PICKUP_ON_THE_WAY', 'LAUNDRY_PICKED'];
-      if (!validPickup.includes(status)) {
-        await connection.rollback();
-        connection.release();
-        return res.status(422).json({ 
-          success: false,
-          message: `Invalid status for pickup phase. Valid: ${validPickup.join(', ')}` 
-        });
-      }
+      if (phase === 'pickup') {
+        const validPickup = ['PICKUP_ON_THE_WAY', 'LAUNDRY_PICKED'];
+        if (!validPickup.includes(status)) {
+          await connection.rollback();
+          return res.status(422).json({ 
+            success: false,
+            message: `Invalid status for pickup phase. Valid: ${validPickup.join(', ')}` 
+          });
+        }
 
-      // Flow validation
-      if (status === 'PICKUP_ON_THE_WAY' && assignment.pickup_status !== null) {
-        await connection.rollback();
-        connection.release();
-        return res.status(422).json({ success: false, message: 'Pickup already started' });
-      }
-      if (status === 'LAUNDRY_PICKED' && assignment.pickup_status !== 'PICKUP_ON_THE_WAY') {
-        await connection.rollback();
-        connection.release();
-        return res.status(422).json({ success: false, message: 'Must be PICKUP_ON_THE_WAY before LAUNDRY_PICKED' });
-      }
+        if (status === 'PICKUP_ON_THE_WAY' && assignment.pickup_status !== null) {
+          await connection.rollback();
+          return res.status(422).json({ success: false, message: 'Pickup already started' });
+        }
+        if (status === 'LAUNDRY_PICKED' && assignment.pickup_status !== 'PICKUP_ON_THE_WAY') {
+          await connection.rollback();
+          return res.status(422).json({ success: false, message: 'Must be PICKUP_ON_THE_WAY before LAUNDRY_PICKED' });
+        }
 
-      await connection.query(
-        'UPDATE courier_assignments SET pickup_status = ? WHERE assignment_id = ?',
-        [status, assignment_id]
-      );
+        await connection.query(
+          'UPDATE courier_assignments SET pickup_status = ? WHERE assignment_id = ?',
+          [status, assignment_id]
+        );
+        orderStatusUpdate = status;
 
-      orderStatusUpdate = status;
-
-      // Notifikasi
-      if (order) {
-        if (status === 'PICKUP_ON_THE_WAY') {
-          await createNotification(connection, order.customer_id, 'Kurir Dalam Perjalanan',
-            `Kurir sedang menuju lokasi Anda untuk mengambil laundry (Order ${assignment.order_id}).`);
-        } else if (status === 'LAUNDRY_PICKED') {
-          await createNotification(connection, order.customer_id, 'Laundry Diambil',
-            `Laundry Anda telah diambil oleh kurir (Order ${assignment.order_id}).`);
-          if (order.owner_id) {
-            await createNotification(connection, order.owner_id, 'Laundry Diambil',
-              `Kurir telah mengambil laundry untuk order ${assignment.order_id}. Silakan input berat setelah menerima.`);
+        if (order) {
+          if (status === 'PICKUP_ON_THE_WAY') {
+            await createNotification(connection, order.customer_id, 'Kurir Dalam Perjalanan',
+              `Kurir sedang menuju lokasi Anda untuk mengambil laundry (Order ${assignment.order_id}).`);
+          } else if (status === 'LAUNDRY_PICKED') {
+            await createNotification(connection, order.customer_id, 'Laundry Diambil',
+              `Laundry Anda telah diambil oleh kurir (Order ${assignment.order_id}).`);
+            if (order.owner_id) {
+              await createNotification(connection, order.owner_id, 'Laundry Diambil',
+                `Kurir telah mengambil laundry untuk order ${assignment.order_id}. Silakan input berat setelah menerima.`);
+            }
           }
         }
-      }
 
-    } else if (phase === 'delivery') {
-      // Delivery phase: DELIVERY_ON_THE_WAY → DELIVERED → DONE
-      const validDelivery = ['DELIVERY_ON_THE_WAY', 'DELIVERED', 'DONE'];
-      if (!validDelivery.includes(status)) {
-        await connection.rollback();
-        connection.release();
-        return res.status(422).json({ 
-          success: false,
-          message: `Invalid status for delivery phase. Valid: ${validDelivery.join(', ')}` 
-        });
-      }
-
-      // Flow validation
-      if (status === 'DELIVERY_ON_THE_WAY' && assignment.delivery_status !== null) {
-        await connection.rollback();
-        connection.release();
-        return res.status(422).json({ success: false, message: 'Delivery already started' });
-      }
-      if (status === 'DELIVERED' && assignment.delivery_status !== 'DELIVERY_ON_THE_WAY') {
-        await connection.rollback();
-        connection.release();
-        return res.status(422).json({ success: false, message: 'Must be DELIVERY_ON_THE_WAY before DELIVERED' });
-      }
-      if (status === 'DONE' && assignment.delivery_status !== 'DELIVERED') {
-        await connection.rollback();
-        connection.release();
-        return res.status(422).json({ success: false, message: 'Must be DELIVERED before DONE' });
-      }
-
-      await connection.query(
-        'UPDATE courier_assignments SET delivery_status = ? WHERE assignment_id = ?',
-        [status, assignment_id]
-      );
-
-      if (status === 'DONE') {
-        // DONE di courier_assignments → order status menjadi DELIVERED
-        orderStatusUpdate = 'DELIVERED';
-      } else if (status === 'DELIVERY_ON_THE_WAY') {
-        orderStatusUpdate = 'DELIVERY_ON_THE_WAY';
-      }
-      // Note: status 'DELIVERED' di courier assignment TIDAK langsung update order
-      // Hanya DONE yang membuat order → DELIVERED
-
-      // Notifikasi
-      if (order) {
-        if (status === 'DELIVERY_ON_THE_WAY') {
-          await createNotification(connection, order.customer_id, 'Laundry Sedang Diantar',
-            `Kurir sedang mengantar laundry Anda (Order ${assignment.order_id}).`);
-        } else if (status === 'DONE') {
-          await createNotification(connection, order.customer_id, 'Laundry Tiba',
-            `Laundry Anda telah diantar (Order ${assignment.order_id}). Silakan konfirmasi penerimaan.`);
+      } else if (phase === 'delivery') {
+        const validDelivery = ['DELIVERY_ON_THE_WAY', 'DELIVERED', 'DONE'];
+        if (!validDelivery.includes(status)) {
+          await connection.rollback();
+          return res.status(422).json({ 
+            success: false,
+            message: `Invalid status for delivery phase. Valid: ${validDelivery.join(', ')}` 
+          });
         }
+
+        if (status === 'DELIVERY_ON_THE_WAY' && assignment.delivery_status !== null) {
+          await connection.rollback();
+          return res.status(422).json({ success: false, message: 'Delivery already started' });
+        }
+        if (status === 'DELIVERED' && assignment.delivery_status !== 'DELIVERY_ON_THE_WAY') {
+          await connection.rollback();
+          return res.status(422).json({ success: false, message: 'Must be DELIVERY_ON_THE_WAY before DELIVERED' });
+        }
+        if (status === 'DONE' && assignment.delivery_status !== 'DELIVERED') {
+          await connection.rollback();
+          return res.status(422).json({ success: false, message: 'Must be DELIVERED before DONE' });
+        }
+
+        await connection.query(
+          'UPDATE courier_assignments SET delivery_status = ? WHERE assignment_id = ?',
+          [status, assignment_id]
+        );
+
+        if (status === 'DONE') {
+          orderStatusUpdate = 'DELIVERED';
+        } else if (status === 'DELIVERY_ON_THE_WAY') {
+          orderStatusUpdate = 'DELIVERY_ON_THE_WAY';
+        }
+
+        if (order) {
+          if (status === 'DELIVERY_ON_THE_WAY') {
+            await createNotification(connection, order.customer_id, 'Laundry Sedang Diantar',
+              `Kurir sedang mengantar laundry Anda (Order ${assignment.order_id}).`);
+          } else if (status === 'DONE') {
+            await createNotification(connection, order.customer_id, 'Laundry Tiba',
+              `Laundry Anda telah diantar (Order ${assignment.order_id}). Silakan konfirmasi penerimaan.`);
+          }
+        }
+      } else {
+        await connection.rollback();
+        return res.status(422).json({ success: false, message: `Invalid phase: ${phase}` });
       }
-    } else {
+
+      if (orderStatusUpdate) {
+        await connection.query(
+          'UPDATE orders SET status = ? WHERE order_id = ?',
+          [orderStatusUpdate, assignment.order_id]
+        );
+        await connection.query(
+          'INSERT INTO order_status_logs (order_id, status, changed_by) VALUES (?, ?, ?)',
+          [assignment.order_id, orderStatusUpdate, courier_id]
+        );
+      }
+
+      await connection.commit();
+
+      res.json({
+        success: true,
+        message: 'Task status updated',
+        data: { assignment_id, phase, status, order_status_updated_to: orderStatusUpdate }
+      });
+    } catch (innerErr) {
       await connection.rollback();
+      throw innerErr;
+    } finally {
       connection.release();
-      return res.status(422).json({ success: false, message: `Invalid phase: ${phase}` });
     }
-
-    // Update order status
-    if (orderStatusUpdate) {
-      await connection.query(
-        'UPDATE orders SET status = ? WHERE order_id = ?',
-        [orderStatusUpdate, assignment.order_id]
-      );
-      await connection.query(
-        'INSERT INTO order_status_logs (order_id, status, changed_by) VALUES (?, ?, ?)',
-        [assignment.order_id, orderStatusUpdate, courier_id]
-      );
-    }
-
-    await connection.commit();
-    connection.release();
-
-    const responseData = {
-      assignment_id,
-      phase,
-      status,
-      order_status_updated_to: orderStatusUpdate
-    };
-
-    res.json({
-      success: true,
-      message: 'Task status updated',
-      data: responseData
-    });
   } catch (err) {
     console.error('updateTaskStatus error:', err.message);
     res.status(500).json({ success: false, message: 'Server error' });
@@ -233,7 +213,6 @@ exports.updateTaskStatus = async (req, res) => {
 // 5.3. Tugas Aktif Kurir
 // GET /couriers/me/tasks
 // Auth: Bearer Token (role: courier, verified)
-// FIX: delivery_status IS NULL OR delivery_status != 'DONE'
 // ============================================
 exports.getTasks = async (req, res) => {
   const courier_id = req.user.id;
@@ -293,7 +272,6 @@ exports.getTaskHistory = async (req, res) => {
 // 5.5. Courier Tersedia
 // GET /couriers/available
 // Auth: Bearer Token (role: owner, admin)
-// Menampilkan kurir yang verified dan tidak sedang punya assignment aktif
 // ============================================
 exports.getAvailableCouriers = async (req, res) => {
   try {
@@ -341,7 +319,6 @@ exports.getEarnings = async (req, res) => {
       params
     );
 
-    // Get wallet balance
     const [wallet] = await pool.query('SELECT * FROM wallets WHERE user_id = ?', [courier_id]);
     const available_balance = wallet.length > 0 ? parseFloat(wallet[0].available_balance) : 0;
     const pending_balance = wallet.length > 0 ? parseFloat(wallet[0].pending_balance) : 0;
@@ -349,7 +326,6 @@ exports.getEarnings = async (req, res) => {
     const totalDeliveries = summary[0].total_deliveries;
     const totalEarned = parseFloat(summary[0].total_earned);
 
-    // Hitung rata-rata per hari
     let days = 1;
     if (date_from && date_to) {
       const d1 = new Date(date_from);
@@ -358,7 +334,6 @@ exports.getEarnings = async (req, res) => {
     }
     const avg_per_day = Math.round(totalEarned / days);
 
-    // By day
     const [byDay] = await pool.query(
       `SELECT DATE(ca.updated_at) AS date, COUNT(*) AS deliveries, COALESCE(SUM(o.courier_earning), 0) AS earned
        FROM courier_assignments ca

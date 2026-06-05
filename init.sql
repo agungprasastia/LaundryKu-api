@@ -76,7 +76,7 @@ CREATE TABLE services (
 -- owner_id menunjukkan owner pemilik service/order
 -- ============================================
 CREATE TABLE orders (
-    order_id VARCHAR(30) PRIMARY KEY,
+    order_id VARCHAR(50) PRIMARY KEY,
     customer_id INT NOT NULL,
     owner_id INT NOT NULL,
     service_id VARCHAR(20) NOT NULL,
@@ -117,8 +117,8 @@ CREATE TABLE orders (
 -- Tagihan yang dibuat otomatis untuk setiap pesanan
 -- ============================================
 CREATE TABLE invoices (
-    invoice_id VARCHAR(30) PRIMARY KEY,
-    order_id VARCHAR(30) NOT NULL,
+    invoice_id VARCHAR(50) PRIMARY KEY,
+    order_id VARCHAR(50) NOT NULL,
     amount DECIMAL(12,2) NULL,
     service_fee DECIMAL(12,2) NULL,
     delivery_fee DECIMAL(12,2) NULL,
@@ -133,8 +133,8 @@ CREATE TABLE invoices (
 -- Mencatat setiap transaksi pembayaran atas suatu invoice
 -- ============================================
 CREATE TABLE payments (
-    payment_id VARCHAR(30) PRIMARY KEY,
-    invoice_id VARCHAR(30) NOT NULL,
+    payment_id VARCHAR(50) PRIMARY KEY,
+    invoice_id VARCHAR(50) NOT NULL,
     user_id INT NOT NULL,
     payment_method VARCHAR(50) NOT NULL,
     amount DECIMAL(12,2) NOT NULL,
@@ -153,8 +153,8 @@ CREATE TABLE payments (
 -- Satu kurir dikunci untuk seluruh siklus order (pickup + delivery)
 -- ============================================
 CREATE TABLE courier_assignments (
-    assignment_id VARCHAR(30) PRIMARY KEY,
-    order_id VARCHAR(30) NOT NULL,
+    assignment_id VARCHAR(50) PRIMARY KEY,
+    order_id VARCHAR(50) NOT NULL,
     courier_id INT NOT NULL,
     current_phase ENUM('pickup', 'delivery') DEFAULT 'pickup',
     pickup_status ENUM('PICKUP_ON_THE_WAY', 'LAUNDRY_PICKED') NULL,
@@ -162,6 +162,7 @@ CREATE TABLE courier_assignments (
     locked TINYINT(1) DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_order_assignment (order_id),
     FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE,
     FOREIGN KEY (courier_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
@@ -173,7 +174,7 @@ CREATE TABLE courier_assignments (
 CREATE TABLE courier_locations (
     id INT AUTO_INCREMENT PRIMARY KEY,
     courier_id INT NOT NULL,
-    assignment_id VARCHAR(30) NOT NULL,
+    assignment_id VARCHAR(50) NOT NULL,
     lat DECIMAL(10,8) NOT NULL,
     lng DECIMAL(11,8) NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -203,13 +204,13 @@ CREATE TABLE wallets (
 -- Setiap mutasi saldo wallet
 -- ============================================
 CREATE TABLE wallet_transactions (
-    transaction_id VARCHAR(30) PRIMARY KEY,
+    transaction_id VARCHAR(50) PRIMARY KEY,
     wallet_id INT NOT NULL,
     type ENUM('credit', 'debit') NOT NULL,
     amount DECIMAL(12,2) NOT NULL,
     status ENUM('pending', 'available') NOT NULL DEFAULT 'pending',
     description VARCHAR(255) NULL,
-    order_id VARCHAR(30) NULL,
+    order_id VARCHAR(50) NULL,
     source VARCHAR(100) NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE CASCADE
@@ -220,7 +221,7 @@ CREATE TABLE wallet_transactions (
 -- Pengajuan penarikan saldo dari available_balance
 -- ============================================
 CREATE TABLE withdrawals (
-    withdraw_id VARCHAR(30) PRIMARY KEY,
+    withdraw_id VARCHAR(50) PRIMARY KEY,
     wallet_id INT NOT NULL,
     amount DECIMAL(12,2) NOT NULL,
     bank_account_number VARCHAR(50) NULL,
@@ -254,7 +255,7 @@ CREATE TABLE notifications (
 -- ============================================
 CREATE TABLE order_status_logs (
     log_id INT AUTO_INCREMENT PRIMARY KEY,
-    order_id VARCHAR(30) NOT NULL,
+    order_id VARCHAR(50) NOT NULL,
     status ENUM(
         'WAITING_OWNER_CONFIRMATION',
         'CONFIRMED',

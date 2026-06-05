@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
-const { isValidEmail, isValidPassword } = require('../helpers/validators');
+const { isValidEmail, isValidPassword, isValidLatLng } = require('../helpers/validators');
 
 // ============================================
 // 1.1. Register
@@ -26,6 +26,15 @@ exports.register = async (req, res) => {
     errors.password = ['Password minimal 6 karakter'];
   }
   if (!role) errors.role = ['Role wajib diisi'];
+
+  // Validasi lat/lng: harus dikirim berpasangan dan dalam range
+  const hasLat = lat !== undefined && lat !== null && lat !== '';
+  const hasLng = lng !== undefined && lng !== null && lng !== '';
+  if (hasLat !== hasLng) {
+    errors.coordinates = ['lat dan lng harus dikirim berpasangan'];
+  } else if (hasLat && hasLng && !isValidLatLng(lat, lng)) {
+    errors.coordinates = ['lat harus -90..90, lng harus -180..180'];
+  }
 
   if (Object.keys(errors).length > 0) {
     return res.status(422).json({ success: false, message: 'Validation error', errors });
@@ -216,13 +225,23 @@ exports.editProfile = async (req, res) => {
 
   try {
     // Build dynamic update query
+    // Validasi lat/lng
+    const hasLat = lat !== undefined && lat !== null;
+    const hasLng = lng !== undefined && lng !== null;
+    if (hasLat !== hasLng) {
+      return res.status(422).json({ success: false, message: 'Validation error', errors: { coordinates: ['lat dan lng harus dikirim berpasangan'] } });
+    }
+    if (hasLat && hasLng && !isValidLatLng(lat, lng)) {
+      return res.status(422).json({ success: false, message: 'Validation error', errors: { coordinates: ['lat harus -90..90, lng harus -180..180'] } });
+    }
+
     const updates = [];
     const params = [];
 
     if (full_name !== undefined) { updates.push('full_name = ?'); params.push(full_name); }
     if (address !== undefined) { updates.push('address = ?'); params.push(address); }
-    if (lat !== undefined) { updates.push('lat = ?'); params.push(lat); }
-    if (lng !== undefined) { updates.push('lng = ?'); params.push(lng); }
+    if (hasLat) { updates.push('lat = ?'); params.push(lat); }
+    if (hasLng) { updates.push('lng = ?'); params.push(lng); }
     if (vehicle_name !== undefined) { updates.push('vehicle_name = ?'); params.push(vehicle_name); }
     if (vehicle_plate_number !== undefined) { updates.push('vehicle_plate_number = ?'); params.push(vehicle_plate_number); }
 

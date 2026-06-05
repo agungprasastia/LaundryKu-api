@@ -80,48 +80,54 @@ exports.verifyUser = async (req, res) => {
     }
 
     const connection = await pool.getConnection();
-    await connection.beginTransaction();
+    try {
+      await connection.beginTransaction();
 
-    await connection.query('UPDATE users SET is_verified = ? WHERE user_id = ?', [is_verified ? 1 : 0, user_id]);
+      await connection.query('UPDATE users SET is_verified = ? WHERE user_id = ?', [is_verified ? 1 : 0, user_id]);
 
-    let wallet_created = false;
-    let wallet_id = null;
+      let wallet_created = false;
+      let wallet_id = null;
 
-    // Jika verified → buat wallet otomatis
-    if (is_verified) {
-      // Cek apakah wallet sudah ada
-      const [existingWallet] = await connection.query('SELECT wallet_id FROM wallets WHERE user_id = ?', [user_id]);
-      if (existingWallet.length === 0) {
-        const [walletResult] = await connection.query(
-          'INSERT INTO wallets (user_id, role) VALUES (?, ?)',
-          [user_id, user.role]
-        );
-        wallet_created = true;
-        wallet_id = walletResult.insertId;
-      } else {
-        wallet_id = existingWallet[0].wallet_id;
+      // Jika verified → buat wallet otomatis
+      if (is_verified) {
+        const [existingWallet] = await connection.query('SELECT wallet_id FROM wallets WHERE user_id = ?', [user_id]);
+        if (existingWallet.length === 0) {
+          const [walletResult] = await connection.query(
+            'INSERT INTO wallets (user_id, role) VALUES (?, ?)',
+            [user_id, user.role]
+          );
+          wallet_created = true;
+          wallet_id = walletResult.insertId;
+        } else {
+          wallet_id = existingWallet[0].wallet_id;
+        }
       }
+
+      // Notifikasi ke user
+      const verifyStatus = is_verified ? 'diverifikasi' : 'dibatalkan verifikasinya';
+      await createNotification(connection, parseInt(user_id), 'Status Verifikasi',
+        `Akun Anda telah ${verifyStatus} oleh admin.${is_verified && wallet_created ? ' Wallet Anda telah dibuat.' : ''}`);
+
+      await connection.commit();
+
+      res.json({
+        success: true,
+        message: is_verified ? 'User verified. Wallet created automatically.' : 'User verification revoked.',
+        data: {
+          user_id: parseInt(user_id),
+          role: user.role,
+          is_verified: is_verified ? true : false,
+          wallet_created,
+          wallet_id
+        }
+      });
+    } catch (err) {
+      await connection.rollback();
+      console.error('verifyUser error:', err.message);
+      res.status(500).json({ success: false, message: 'Server error' });
+    } finally {
+      connection.release();
     }
-
-    // Notifikasi ke user
-    const verifyStatus = is_verified ? 'diverifikasi' : 'dibatalkan verifikasinya';
-    await createNotification(connection, parseInt(user_id), 'Status Verifikasi',
-      `Akun Anda telah ${verifyStatus} oleh admin.${is_verified && wallet_created ? ' Wallet Anda telah dibuat.' : ''}`);
-
-    await connection.commit();
-    connection.release();
-
-    res.json({
-      success: true,
-      message: is_verified ? 'User verified. Wallet created automatically.' : 'User verification revoked.',
-      data: {
-        user_id: parseInt(user_id),
-        role: user.role,
-        is_verified: is_verified ? true : false,
-        wallet_created,
-        wallet_id
-      }
-    });
   } catch (err) {
     console.error('verifyUser error:', err.message);
     res.status(500).json({ success: false, message: 'Server error' });

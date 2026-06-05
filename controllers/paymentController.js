@@ -1,10 +1,9 @@
 const crypto = require('crypto');
-const midtransClient = require('midtrans-client');
 const pool = require('../config/db');
 const { createNotification } = require('../helpers/notification');
-const { isValidEnum } = require('../helpers/validators');
+const { generateId } = require('../helpers/idGenerator');
 
-// Status order dalam urutan (untuk cek apakah status sudah lewat PROCESSING)
+// Status order dalam urutan
 const STATUS_ORDER = [
   'WAITING_OWNER_CONFIRMATION', 'CONFIRMED', 'PICKUP_ON_THE_WAY', 'LAUNDRY_PICKED',
   'PROCESSING', 'READY_FOR_DELIVERY', 'DELIVERY_ON_THE_WAY', 'DELIVERED', 'COMPLETED'
@@ -12,18 +11,28 @@ const STATUS_ORDER = [
 
 // ============================================
 // Midtrans Snap Client (Sandbox)
+// Hanya diinisialisasi jika USE_DUMMY_PAYMENT bukan 'true'
 // ============================================
-const snap = new midtransClient.Snap({
-  isProduction: false,
-  serverKey: process.env.MIDTRANS_SERVER_KEY || '',
-  clientKey: '' // Client key optional untuk backend
-});
+let snap = null;
+const useDummyPayment = process.env.USE_DUMMY_PAYMENT === 'true';
+
+if (!useDummyPayment) {
+  try {
+    const midtransClient = require('midtrans-client');
+    snap = new midtransClient.Snap({
+      isProduction: false,
+      serverKey: process.env.MIDTRANS_SERVER_KEY || '',
+      clientKey: ''
+    });
+  } catch (err) {
+    console.warn('[Payment] midtrans-client not installed. Set USE_DUMMY_PAYMENT=true untuk mode development.');
+  }
+}
 
 // ============================================
 // 4.1. Lihat Invoice
 // GET /payments/invoice/:invoice_id
-// Auth: Bearer Token (customer/owner/admin)
-// Customer hanya bisa lihat invoice miliknya
+// FIX: Courier di-forbid (atau cek assignment)
 // ============================================
 exports.getInvoice = async (req, res) => {
   const { invoice_id } = req.params;
@@ -32,7 +41,7 @@ exports.getInvoice = async (req, res) => {
 
   try {
     const [invoices] = await pool.query(
-      `SELECT i.*, o.customer_id, o.owner_id 
+      `SELECT i.*, o.customer_id, o.owner_id, o.order_id
        FROM invoices i 
        JOIN orders o ON i.order_id = o.order_id 
        WHERE i.invoice_id = ?`,
@@ -44,13 +53,24 @@ exports.getInvoice = async (req, res) => {
 
     const inv = invoices[0];
 
-    // Authorization
+    // Authorization per role
     if (userRole === 'customer' && inv.customer_id !== userId) {
       return res.status(403).json({ success: false, message: 'Forbidden: not your invoice' });
     }
     if (userRole === 'owner' && inv.owner_id !== userId) {
       return res.status(403).json({ success: false, message: 'Forbidden: not your order' });
     }
+    if (userRole === 'courier') {
+      // Courier hanya bisa lihat invoice jika assigned ke order tersebut
+      const [assignments] = await pool.query(
+        'SELECT assignment_id FROM courier_assignments WHERE order_id = ? AND courier_id = ?',
+        [inv.order_id, userId]
+      );
+      if (assignments.length === 0) {
+        return res.status(403).json({ success: false, message: 'Forbidden: not assigned to this order' });
+      }
+    }
+    // admin: semua diperbolehkan (tidak ada filter)
 
     res.json({
       success: true,
@@ -73,18 +93,17 @@ exports.getInvoice = async (req, res) => {
 };
 
 // ============================================
-// 4.2. Bayar Invoice (Midtrans Snap)
+// 4.2. Bayar Invoice
 // POST /payments
 // Auth: Bearer Token (role: customer)
 //
-// Flow:
-//   1. Customer POST /payments → backend buat transaksi Midtrans Snap
-//   2. Backend return snap_token + redirect_url
-//   3. Frontend buka Snap payment page (redirect/popup)
-//   4. Setelah bayar, Midtrans kirim notification ke POST /payments/callback
+// FIX:
+//   - Cek existing pending payment untuk invoice yang sama
+//   - Dummy mode jika USE_DUMMY_PAYMENT=true
+//   - generateId untuk payment_id
 // ============================================
 exports.createPayment = async (req, res) => {
-  const { invoice_id, payment_method } = req.body;
+  const { invoice_id } = req.body;
   const user_id = req.user.id;
 
   // Validasi
@@ -120,18 +139,70 @@ exports.createPayment = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invoice amount not yet calculated. Owner must input weight first.' });
     }
 
-    // Ambil data customer untuk Midtrans
+    // FIX: Cek existing pending payment untuk invoice yang sama
+    const [existingPending] = await pool.query(
+      "SELECT payment_id, va_number FROM payments WHERE invoice_id = ? AND status = 'pending'",
+      [invoice_id]
+    );
+    if (existingPending.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'Payment already created for this invoice. Use the existing payment.',
+        data: {
+          payment_id: existingPending[0].payment_id,
+          snap_token: existingPending[0].va_number, // snap_token disimpan di va_number
+          status: 'pending'
+        }
+      });
+    }
+
+    // Ambil data customer
     const [customers] = await pool.query('SELECT full_name, email FROM users WHERE user_id = ?', [user_id]);
     const customer = customers[0];
 
-    const paymentId = `PAY${Date.now()}`;
+    const paymentId = generateId('PAY');
     const grossAmount = Math.round(parseFloat(invoice.amount));
+
+    // ========== DUMMY MODE ==========
+    if (useDummyPayment) {
+      const dummyToken = `dummy_snap_${paymentId}`;
+      const dummyUrl = `http://localhost:${process.env.PORT || 3000}/payments/callback?info=dummy`;
+
+      await pool.query(
+        `INSERT INTO payments (payment_id, invoice_id, user_id, payment_method, amount, status, va_number) 
+         VALUES (?, ?, ?, 'dummy', ?, 'pending', ?)`,
+        [paymentId, invoice_id, user_id, grossAmount, dummyToken]
+      );
+
+      return res.status(201).json({
+        success: true,
+        message: 'Payment created (DUMMY MODE). Gunakan POST /payments/callback untuk simulasi.',
+        data: {
+          payment_id: paymentId,
+          invoice_id,
+          order_id: invoice.order_id,
+          amount: grossAmount,
+          snap_token: dummyToken,
+          redirect_url: dummyUrl,
+          status: 'pending',
+          mode: 'dummy'
+        }
+      });
+    }
+
+    // ========== MIDTRANS MODE ==========
+    if (!snap) {
+      return res.status(503).json({
+        success: false,
+        message: 'Midtrans client not available. Install midtrans-client atau set USE_DUMMY_PAYMENT=true di .env.'
+      });
+    }
 
     // Simpan payment record dulu (status = pending)
     await pool.query(
       `INSERT INTO payments (payment_id, invoice_id, user_id, payment_method, amount, status) 
-       VALUES (?, ?, ?, ?, ?, 'pending')`,
-      [paymentId, invoice_id, user_id, payment_method || 'midtrans_snap', grossAmount]
+       VALUES (?, ?, ?, 'midtrans_snap', ?, 'pending')`,
+      [paymentId, invoice_id, user_id, grossAmount]
     );
 
     // Buat transaksi Midtrans Snap
@@ -186,40 +257,21 @@ exports.createPayment = async (req, res) => {
     });
   } catch (err) {
     console.error('createPayment error:', err.message);
-
-    // Midtrans error detail
     if (err.ApiResponse) {
       console.error('Midtrans API Response:', JSON.stringify(err.ApiResponse));
     }
-
     res.status(500).json({ success: false, message: 'Server error: ' + err.message });
   }
 };
 
 // ============================================
-// 4.3. Payment Notification Callback (Midtrans)
+// 4.3. Payment Notification Callback
 // POST /payments/callback
-// Auth: Validasi via Midtrans Signature Key
-//
-// Midtrans mengirim notification ke URL ini setiap kali status berubah.
-// Signature key: SHA512(order_id + status_code + gross_amount + server_key)
-//
-// IDEMPOTENT: payment yang sudah success tidak akan diproses ulang
-//
-// Midtrans notification body contoh:
-// {
-//   "transaction_type": "on-us",
-//   "transaction_time": "2026-06-05 10:00:00",
-//   "transaction_status": "settlement",   ← paid
-//   "transaction_id": "xxx",
-//   "status_message": "midtrans payment notification",
-//   "status_code": "200",
-//   "signature_key": "SHA512(...)",
-//   "order_id": "PAY1234567890",
-//   "gross_amount": "47200.00",
-//   "payment_type": "bank_transfer",
-//   "fraud_status": "accept"
-// }
+// FIX:
+//   - SELECT ... FOR UPDATE pada payment
+//   - Validasi gross_amount vs payment.amount
+//   - Wallet not found → rollback + error
+//   - Dummy mode support
 // ============================================
 exports.paymentCallback = async (req, res) => {
   const {
@@ -231,13 +283,39 @@ exports.paymentCallback = async (req, res) => {
     fraud_status: fraudStatus
   } = req.body;
 
+  // ========== DUMMY MODE ==========
+  if (useDummyPayment) {
+    // Di dummy mode, terima format lebih sederhana
+    const dummyPaymentId = paymentId || req.body.payment_id;
+    const dummyStatus = transactionStatus || req.body.status || 'settlement';
+
+    if (!dummyPaymentId) {
+      return res.status(400).json({ success: false, message: 'payment_id / order_id wajib diisi' });
+    }
+
+    // Tentukan paymentStatus
+    let paymentStatus;
+    if (dummyStatus === 'settlement' || dummyStatus === 'success' || dummyStatus === 'capture') {
+      paymentStatus = 'success';
+    } else if (dummyStatus === 'deny' || dummyStatus === 'cancel' || dummyStatus === 'expire' || dummyStatus === 'failed') {
+      paymentStatus = 'failed';
+    } else if (dummyStatus === 'pending') {
+      return res.json({ success: true, message: 'Notification received. Payment still pending.' });
+    } else {
+      return res.json({ success: true, message: `Notification received. Unhandled status: ${dummyStatus}` });
+    }
+
+    // Lanjut ke flow yang sama di bawah (dengan paymentId = dummyPaymentId)
+    return processCallbackInternal(dummyPaymentId, paymentStatus, req, res);
+  }
+
+  // ========== MIDTRANS MODE ==========
   // Validasi input dasar
   if (!paymentId || !statusCode || !grossAmount || !signatureKey) {
     return res.status(400).json({ success: false, message: 'Missing required notification fields' });
   }
 
   // Validasi Midtrans Signature Key
-  // Format: SHA512(order_id + status_code + gross_amount + server_key)
   const serverKey = process.env.MIDTRANS_SERVER_KEY || '';
   const expectedSignature = crypto
     .createHash('sha512')
@@ -249,13 +327,9 @@ exports.paymentCallback = async (req, res) => {
     return res.status(403).json({ success: false, message: 'Invalid signature key' });
   }
 
-  // Tentukan status pembayaran dari Midtrans transaction_status
-  // settlement / capture = success
-  // deny / cancel / expire = failed
-  // pending = masih pending (abaikan, tunggu settlement)
+  // Tentukan status pembayaran
   let paymentStatus;
   if (transactionStatus === 'settlement' || transactionStatus === 'capture') {
-    // capture: khusus credit card, cek fraud_status
     if (transactionStatus === 'capture' && fraudStatus !== 'accept') {
       paymentStatus = 'failed';
     } else {
@@ -264,60 +338,75 @@ exports.paymentCallback = async (req, res) => {
   } else if (transactionStatus === 'deny' || transactionStatus === 'cancel' || transactionStatus === 'expire') {
     paymentStatus = 'failed';
   } else if (transactionStatus === 'pending') {
-    // Pending — acknowledge tapi jangan proses wallet
     return res.json({ success: true, message: 'Notification received. Payment still pending.' });
   } else {
     return res.json({ success: true, message: `Notification received. Unhandled status: ${transactionStatus}` });
   }
 
+  return processCallbackInternal(paymentId, paymentStatus, req, res, grossAmount);
+};
+
+// ============================================
+// Internal: Process callback (shared by dummy + midtrans)
+// ============================================
+async function processCallbackInternal(paymentId, paymentStatus, req, res, callbackGrossAmount) {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
 
-    // 1. Cek payment
-    const [payments] = await connection.query('SELECT * FROM payments WHERE payment_id = ?', [paymentId]);
+    // FIX: SELECT ... FOR UPDATE — lock payment row untuk race condition
+    const [payments] = await connection.query('SELECT * FROM payments WHERE payment_id = ? FOR UPDATE', [paymentId]);
     if (payments.length === 0) {
       await connection.rollback();
-      connection.release();
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
 
     const payment = payments[0];
 
-    // IDEMPOTENT: jika payment sudah success, return ok tanpa proses ulang
+    // IDEMPOTENT: jika payment sudah success, return ok
     if (payment.status === 'success') {
       await connection.rollback();
-      connection.release();
       return res.json({ success: true, message: 'Payment already processed as success. No action taken.' });
+    }
+
+    // FIX: Validasi gross_amount vs payment.amount (hanya untuk Midtrans mode)
+    if (callbackGrossAmount !== undefined) {
+      const expectedAmount = parseFloat(payment.amount);
+      const receivedAmount = parseFloat(callbackGrossAmount);
+      if (Math.abs(expectedAmount - receivedAmount) > 0.01) {
+        await connection.rollback();
+        console.warn(`[Payment] Amount mismatch for ${paymentId}: expected=${expectedAmount}, received=${receivedAmount}`);
+        return res.status(400).json({
+          success: false,
+          message: `Amount mismatch. Expected: ${expectedAmount}, received: ${receivedAmount}`
+        });
+      }
     }
 
     if (paymentStatus === 'failed') {
       await connection.query('UPDATE payments SET status = ? WHERE payment_id = ?', ['failed', paymentId]);
       await connection.commit();
-      connection.release();
       return res.json({ success: true, message: 'Notification processed. Payment marked as failed.' });
     }
 
-    // --- Status = success (settlement/capture) ---
+    // --- Status = success ---
 
-    // 2. Update payment
+    // Update payment
     await connection.query(
       'UPDATE payments SET status = ?, payment_method = ?, paid_at = NOW() WHERE payment_id = ?',
-      ['success', req.body.payment_type || 'midtrans', paymentId]
+      ['success', req.body.payment_type || payment.payment_method || 'midtrans', paymentId]
     );
 
-    // 3. Update invoice → paid
+    // Update invoice → paid (lock invoice juga)
+    const [invoiceRows] = await connection.query('SELECT * FROM invoices WHERE invoice_id = ? FOR UPDATE', [payment.invoice_id]);
     await connection.query('UPDATE invoices SET status = ? WHERE invoice_id = ?', ['paid', payment.invoice_id]);
 
-    // 4. Ambil order
-    const [invoices] = await connection.query('SELECT order_id FROM invoices WHERE invoice_id = ?', [payment.invoice_id]);
-    const order_id = invoices[0].order_id;
-
-    const [orders] = await connection.query('SELECT * FROM orders WHERE order_id = ?', [order_id]);
+    // Ambil order (lock)
+    const order_id = invoiceRows[0].order_id;
+    const [orders] = await connection.query('SELECT * FROM orders WHERE order_id = ? FOR UPDATE', [order_id]);
     const order = orders[0];
 
-    // 5. Update order status → PROCESSING
-    // JANGAN downgrade status jika sudah lebih tinggi dari PROCESSING
+    // Update order status → PROCESSING (jangan downgrade)
     const currentIndex = STATUS_ORDER.indexOf(order.status);
     const processingIndex = STATUS_ORDER.indexOf('PROCESSING');
 
@@ -329,15 +418,16 @@ exports.paymentCallback = async (req, res) => {
       );
     }
 
-    // 6. Distribusi saldo ke PENDING BALANCE wallet
-    // IDEMPOTENT: cek apakah sudah ada wallet_transactions untuk order ini
+    // Distribusi saldo — IDEMPOTENT check
     const [existingTxns] = await connection.query(
       `SELECT transaction_id FROM wallet_transactions WHERE order_id = ? AND type = 'credit'`,
       [order_id]
     );
 
+    let walletDistributed = false;
+
     if (existingTxns.length === 0) {
-      // Belum pernah distribusi — lakukan sekarang
+      walletDistributed = true;
       const ownerEarning = parseFloat(order.owner_earning) || 0;
       const courierEarning = parseFloat(order.courier_earning) || 0;
       const adminCommission = parseFloat(order.admin_commission) || 0;
@@ -345,18 +435,24 @@ exports.paymentCallback = async (req, res) => {
       // Owner earning → pending balance
       if (order.owner_id && ownerEarning > 0) {
         const [ownerWallet] = await connection.query('SELECT wallet_id FROM wallets WHERE user_id = ?', [order.owner_id]);
-        if (ownerWallet.length > 0) {
-          const txnId = `TXN${Date.now()}A`;
-          await connection.query(
-            `INSERT INTO wallet_transactions (transaction_id, wallet_id, type, amount, status, description, order_id, source) 
-             VALUES (?, ?, 'credit', ?, 'pending', ?, ?, ?)`,
-            [txnId, ownerWallet[0].wallet_id, ownerEarning, `Pendapatan order ${order_id}`, order_id, `order:${order_id}`]
-          );
-          await connection.query(
-            'UPDATE wallets SET pending_balance = pending_balance + ?, total_earned = total_earned + ? WHERE wallet_id = ?',
-            [ownerEarning, ownerEarning, ownerWallet[0].wallet_id]
-          );
+        if (ownerWallet.length === 0) {
+          // FIX: Wallet wajib ada — rollback jika tidak ditemukan
+          await connection.rollback();
+          console.error(`[Payment] Owner wallet not found for user_id=${order.owner_id}, order=${order_id}`);
+          return res.status(500).json({
+            success: false,
+            message: `Owner wallet not found for user_id=${order.owner_id}. Admin harus verify owner terlebih dahulu.`
+          });
         }
+        await connection.query(
+          `INSERT INTO wallet_transactions (transaction_id, wallet_id, type, amount, status, description, order_id, source) 
+           VALUES (?, ?, 'credit', ?, 'pending', ?, ?, ?)`,
+          [generateId('TXN'), ownerWallet[0].wallet_id, ownerEarning, `Pendapatan order ${order_id}`, order_id, `order:${order_id}`]
+        );
+        await connection.query(
+          'UPDATE wallets SET pending_balance = pending_balance + ?, total_earned = total_earned + ? WHERE wallet_id = ?',
+          [ownerEarning, ownerEarning, ownerWallet[0].wallet_id]
+        );
       }
 
       // Courier earning → pending balance
@@ -366,39 +462,51 @@ exports.paymentCallback = async (req, res) => {
       if (assignments.length > 0 && courierEarning > 0) {
         const courierId = assignments[0].courier_id;
         const [courierWallet] = await connection.query('SELECT wallet_id FROM wallets WHERE user_id = ?', [courierId]);
-        if (courierWallet.length > 0) {
-          const txnId = `TXN${Date.now()}B`;
-          await connection.query(
-            `INSERT INTO wallet_transactions (transaction_id, wallet_id, type, amount, status, description, order_id, source) 
-             VALUES (?, ?, 'credit', ?, 'pending', ?, ?, ?)`,
-            [txnId, courierWallet[0].wallet_id, courierEarning, `Pendapatan order ${order_id}`, order_id, `order:${order_id}`]
-          );
-          await connection.query(
-            'UPDATE wallets SET pending_balance = pending_balance + ?, total_earned = total_earned + ? WHERE wallet_id = ?',
-            [courierEarning, courierEarning, courierWallet[0].wallet_id]
-          );
+        if (courierWallet.length === 0) {
+          // FIX: Wallet wajib ada — rollback jika tidak ditemukan
+          await connection.rollback();
+          console.error(`[Payment] Courier wallet not found for user_id=${courierId}, order=${order_id}`);
+          return res.status(500).json({
+            success: false,
+            message: `Courier wallet not found for user_id=${courierId}. Admin harus verify courier terlebih dahulu.`
+          });
         }
+        await connection.query(
+          `INSERT INTO wallet_transactions (transaction_id, wallet_id, type, amount, status, description, order_id, source) 
+           VALUES (?, ?, 'credit', ?, 'pending', ?, ?, ?)`,
+          [generateId('TXN'), courierWallet[0].wallet_id, courierEarning, `Pendapatan order ${order_id}`, order_id, `order:${order_id}`]
+        );
+        await connection.query(
+          'UPDATE wallets SET pending_balance = pending_balance + ?, total_earned = total_earned + ? WHERE wallet_id = ?',
+          [courierEarning, courierEarning, courierWallet[0].wallet_id]
+        );
       }
 
-      // Admin commission → langsung AVAILABLE (tidak perlu menunggu COMPLETED)
+      // Admin commission → langsung AVAILABLE
       if (adminCommission > 0) {
         const [adminWallet] = await connection.query("SELECT wallet_id FROM wallets WHERE role = 'admin' LIMIT 1");
-        if (adminWallet.length > 0) {
-          const txnId = `TXN${Date.now()}C`;
-          await connection.query(
-            `INSERT INTO wallet_transactions (transaction_id, wallet_id, type, amount, status, description, order_id, source) 
-             VALUES (?, ?, 'credit', ?, 'available', ?, ?, ?)`,
-            [txnId, adminWallet[0].wallet_id, adminCommission, `Komisi order ${order_id}`, order_id, `commission:${order_id}`]
-          );
-          await connection.query(
-            'UPDATE wallets SET available_balance = available_balance + ?, total_earned = total_earned + ? WHERE wallet_id = ?',
-            [adminCommission, adminCommission, adminWallet[0].wallet_id]
-          );
+        if (adminWallet.length === 0) {
+          // FIX: Admin wallet wajib ada — rollback
+          await connection.rollback();
+          console.error(`[Payment] Admin wallet not found for order=${order_id}`);
+          return res.status(500).json({
+            success: false,
+            message: 'Admin wallet not found. Pastikan admin sudah memiliki wallet.'
+          });
         }
+        await connection.query(
+          `INSERT INTO wallet_transactions (transaction_id, wallet_id, type, amount, status, description, order_id, source) 
+           VALUES (?, ?, 'credit', ?, 'available', ?, ?, ?)`,
+          [generateId('TXN'), adminWallet[0].wallet_id, adminCommission, `Komisi order ${order_id}`, order_id, `commission:${order_id}`]
+        );
+        await connection.query(
+          'UPDATE wallets SET available_balance = available_balance + ?, total_earned = total_earned + ? WHERE wallet_id = ?',
+          [adminCommission, adminCommission, adminWallet[0].wallet_id]
+        );
       }
     }
 
-    // 7. Notifikasi
+    // Notifikasi
     await createNotification(connection, order.customer_id, 'Pembayaran Berhasil',
       `Pesanan ${order_id} telah dibayar dan sedang diproses.`);
     if (order.owner_id) {
@@ -407,7 +515,6 @@ exports.paymentCallback = async (req, res) => {
     }
 
     await connection.commit();
-    connection.release();
 
     res.json({
       success: true,
@@ -416,13 +523,14 @@ exports.paymentCallback = async (req, res) => {
         payment_id: paymentId,
         status: 'success',
         order_id,
-        wallet_distributed: existingTxns.length === 0
+        wallet_distributed: walletDistributed
       }
     });
   } catch (err) {
     await connection.rollback();
-    connection.release();
     console.error('paymentCallback error:', err.message);
     res.status(500).json({ success: false, message: 'Server error' });
+  } finally {
+    connection.release();
   }
-};
+}

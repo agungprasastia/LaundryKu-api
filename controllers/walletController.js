@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const { isPositiveNumber } = require('../helpers/validators');
 const { createNotification } = require('../helpers/notification');
+const { generateId } = require('../helpers/idGenerator');
 
 // ============================================
 // 8.1. Lihat Saldo Wallet
@@ -116,7 +117,7 @@ exports.withdraw = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Insufficient available balance' });
     }
 
-    const withdrawId = `WD${Date.now()}`;
+    const withdrawId = generateId('WD');
 
     const connection = await pool.getConnection();
     await connection.beginTransaction();
@@ -138,7 +139,7 @@ exports.withdraw = async (req, res) => {
     await connection.query(
       `INSERT INTO wallet_transactions (transaction_id, wallet_id, type, amount, status, description, source)
        VALUES (?, ?, 'debit', ?, 'available', ?, ?)`,
-      [`TXN${Date.now()}`, wallet.wallet_id, withdrawAmount, `Withdraw ${withdrawId}`, `withdraw:${withdrawId}`]
+      [`${generateId('TXN')}`, wallet.wallet_id, withdrawAmount, `Withdraw ${withdrawId}`, `withdraw:${withdrawId}`]
     );
 
     // Notifikasi ke admin

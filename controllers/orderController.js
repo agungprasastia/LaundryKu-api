@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const { calculateDistanceKm, isManualDistanceAllowed } = require('../helpers/distance');
 const { createNotification } = require('../helpers/notification');
 const { isPositiveNumber, isNonNegativeNumber, isValidDatetime } = require('../helpers/validators');
+const { generateId } = require('../helpers/idGenerator');
 
 // ============================================
 // Status flow yang valid (9 tahap sesuai dokumen)
@@ -58,10 +59,9 @@ exports.createOrder = async (req, res) => {
     const service = services[0];
     await connection.beginTransaction();
 
-    // 2. Generate IDs
-    const timestamp = Date.now();
-    const orderId = `ORD${timestamp}`;
-    const invoiceId = `INV${timestamp}`;
+    // 2. Generate IDs (dengan random suffix)
+    const orderId = generateId('ORD');
+    const invoiceId = generateId('INV');
 
     // 3. Buat order — simpan owner_id dari service, snapshot harga
     await connection.query(
@@ -89,7 +89,6 @@ exports.createOrder = async (req, res) => {
       `Pesanan baru ${orderId} dari customer. Silakan konfirmasi.`);
 
     await connection.commit();
-    connection.release();
 
     res.status(201).json({
       success: true,
@@ -104,9 +103,10 @@ exports.createOrder = async (req, res) => {
     });
   } catch (err) {
     await connection.rollback();
-    connection.release();
     console.error('createOrder error:', err.message);
     res.status(500).json({ success: false, message: 'Server error' });
+  } finally {
+    connection.release();
   }
 };
 
@@ -162,11 +162,6 @@ exports.getMyOrders = async (req, res) => {
 // 3.3. Get Order Detail
 // GET /orders/:order_id
 // Auth: Bearer Token (customer/owner/courier/admin)
-// Authorization:
-//   - customer: hanya order miliknya
-//   - owner: hanya order milik owner_id-nya
-//   - courier: hanya order yang di-assign ke dirinya
-//   - admin: semua
 // ============================================
 exports.getOrderDetail = async (req, res) => {
   const { order_id } = req.params;
@@ -257,11 +252,7 @@ exports.getOrderDetail = async (req, res) => {
 // ============================================
 // 3.4. Update Order Status (Owner)
 // PATCH /orders/:order_id/status
-// Auth: Bearer Token (role: owner, verified)
-// Valid transitions by owner:
-//   WAITING_OWNER_CONFIRMATION → CONFIRMED
-//   PROCESSING → READY_FOR_DELIVERY
-// Note: LAUNDRY_PICKED → PROCESSING dilakukan oleh payment callback
+// FIX: try/catch/finally dengan rollback+release
 // ============================================
 exports.updateOrderStatus = async (req, res) => {
   const { order_id } = req.params;
@@ -274,10 +265,14 @@ exports.updateOrderStatus = async (req, res) => {
     return res.status(422).json({ success: false, message: `Invalid status. Owner can set: ${validOwnerStatuses.join(', ')}` });
   }
 
+  const connection = await pool.getConnection();
   try {
+    await connection.beginTransaction();
+
     // Cek order ada dan milik owner ini
-    const [orders] = await pool.query('SELECT * FROM orders WHERE order_id = ? AND owner_id = ?', [order_id, userId]);
+    const [orders] = await connection.query('SELECT * FROM orders WHERE order_id = ? AND owner_id = ?', [order_id, userId]);
     if (orders.length === 0) {
+      await connection.rollback();
       return res.status(404).json({ success: false, message: 'Order not found or not owned by you' });
     }
 
@@ -290,11 +285,9 @@ exports.updateOrderStatus = async (req, res) => {
     const currentStatus = orders[0].status;
     const allowed = statusFlow[currentStatus] || [];
     if (!allowed.includes(status)) {
+      await connection.rollback();
       return res.status(422).json({ success: false, message: `Invalid status transition. Current: ${currentStatus}, allowed: ${allowed.join(', ') || 'none'}` });
     }
-
-    const connection = await pool.getConnection();
-    await connection.beginTransaction();
 
     await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [status, order_id]);
     await connection.query(
@@ -312,7 +305,6 @@ exports.updateOrderStatus = async (req, res) => {
     }
 
     await connection.commit();
-    connection.release();
 
     res.json({
       success: true,
@@ -320,16 +312,20 @@ exports.updateOrderStatus = async (req, res) => {
       data: { order_id, status }
     });
   } catch (err) {
+    await connection.rollback();
     console.error('updateOrderStatus error:', err.message);
     res.status(500).json({ success: false, message: 'Server error' });
+  } finally {
+    connection.release();
   }
 };
 
 // ============================================
 // 3.5. Assign Courier (Owner)
 // POST /orders/:order_id/assign-courier
-// Auth: Bearer Token (role: owner, verified)
-// Courier locking — 1 kurir = pickup + delivery
+// FIX:
+//   - try/catch/finally
+//   - Handle duplicate key error (UNIQUE order_id)
 // ============================================
 exports.assignCourier = async (req, res) => {
   const { order_id } = req.params;
@@ -348,13 +344,11 @@ exports.assignCourier = async (req, res) => {
     const [orders] = await connection.query('SELECT * FROM orders WHERE order_id = ? AND owner_id = ?', [order_id, userId]);
     if (orders.length === 0) {
       await connection.rollback();
-      connection.release();
       return res.status(404).json({ success: false, message: 'Order not found or not owned by you' });
     }
 
     if (orders[0].status !== 'CONFIRMED') {
       await connection.rollback();
-      connection.release();
       return res.status(422).json({ success: false, message: 'Order must be CONFIRMED before assigning courier' });
     }
 
@@ -364,28 +358,16 @@ exports.assignCourier = async (req, res) => {
     );
     if (couriers.length === 0) {
       await connection.rollback();
-      connection.release();
       return res.status(404).json({ success: false, message: 'Courier not found' });
     }
     if (!couriers[0].is_verified) {
       await connection.rollback();
-      connection.release();
       return res.status(422).json({ success: false, message: 'Courier has not been verified by admin' });
     }
 
-    // Cek apakah sudah ada assignment (courier locking — tidak boleh ganti)
-    const [existingAssignment] = await connection.query(
-      'SELECT assignment_id FROM courier_assignments WHERE order_id = ?',
-      [order_id]
-    );
-    if (existingAssignment.length > 0) {
-      await connection.rollback();
-      connection.release();
-      return res.status(409).json({ success: false, message: 'Courier already locked for this order. Cannot reassign.' });
-    }
+    const assignmentId = generateId('ASG');
 
-    const assignmentId = `ASG${Date.now()}`;
-
+    // INSERT dengan UNIQUE constraint pada order_id — handle duplicate
     await connection.query(
       `INSERT INTO courier_assignments (assignment_id, order_id, courier_id, current_phase, locked) 
        VALUES (?, ?, ?, 'pickup', 1)`,
@@ -397,7 +379,6 @@ exports.assignCourier = async (req, res) => {
       `Anda ditugaskan untuk order ${order_id}. Silakan mulai pickup.`);
 
     await connection.commit();
-    connection.release();
 
     res.status(201).json({
       success: true,
@@ -412,22 +393,25 @@ exports.assignCourier = async (req, res) => {
     });
   } catch (err) {
     await connection.rollback();
-    connection.release();
+
+    // Handle duplicate key error (UNIQUE constraint pada order_id)
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ success: false, message: 'Courier already locked for this order. Cannot reassign.' });
+    }
+
     console.error('assignCourier error:', err.message);
     res.status(500).json({ success: false, message: 'Server error' });
+  } finally {
+    connection.release();
   }
 };
 
 // ============================================
 // 3.6. Input Berat Laundry (Owner)
 // PATCH /orders/:order_id/weight
-// Auth: Bearer Token (role: owner, verified)
-// Hanya boleh dilakukan saat status LAUNDRY_PICKED
-//
-// Distance calculation priority:
-//   1. Haversine dari koordinat pickup customer + koordinat owner
-//   2. Manual distance_km dari request body (jika ALLOW_MANUAL_DISTANCE=true)
-//   3. Error jika keduanya tidak tersedia
+// FIX:
+//   - try/catch/finally dengan rollback+release
+//   - Haversine null/undefined check (bukan truthy)
 // ============================================
 exports.inputWeight = async (req, res) => {
   const { order_id } = req.params;
@@ -443,9 +427,13 @@ exports.inputWeight = async (req, res) => {
     return res.status(422).json({ success: false, message: 'Validation error', errors: { distance_km: ['distance_km harus >= 0'] } });
   }
 
+  const connection = await pool.getConnection();
   try {
-    const [orders] = await pool.query('SELECT * FROM orders WHERE order_id = ? AND owner_id = ?', [order_id, userId]);
+    await connection.beginTransaction();
+
+    const [orders] = await connection.query('SELECT * FROM orders WHERE order_id = ? AND owner_id = ?', [order_id, userId]);
     if (orders.length === 0) {
+      await connection.rollback();
       return res.status(404).json({ success: false, message: 'Order not found or not owned by you' });
     }
 
@@ -453,18 +441,22 @@ exports.inputWeight = async (req, res) => {
 
     // Weight hanya bisa diinput saat LAUNDRY_PICKED
     if (order.status !== 'LAUNDRY_PICKED') {
+      await connection.rollback();
       return res.status(422).json({ success: false, message: 'Weight can only be input when order status is LAUNDRY_PICKED' });
     }
 
     // --- Distance calculation ---
-    // Prioritas 1: Haversine dari koordinat pickup customer + koordinat owner
+    // FIX: Gunakan null/undefined check, bukan truthy (0 adalah valid lat/lng)
     let distance_km = null;
     let distance_source = null;
 
-    const hasPickupCoords = order.pickup_lat && order.pickup_lng;
+    const hasPickupCoords = order.pickup_lat !== null && order.pickup_lat !== undefined
+                         && order.pickup_lng !== null && order.pickup_lng !== undefined;
     if (hasPickupCoords) {
-      const [ownerData] = await pool.query('SELECT lat, lng FROM users WHERE user_id = ?', [userId]);
-      const hasOwnerCoords = ownerData.length > 0 && ownerData[0].lat && ownerData[0].lng;
+      const [ownerData] = await connection.query('SELECT lat, lng FROM users WHERE user_id = ?', [userId]);
+      const hasOwnerCoords = ownerData.length > 0
+                          && ownerData[0].lat !== null && ownerData[0].lat !== undefined
+                          && ownerData[0].lng !== null && ownerData[0].lng !== undefined;
 
       if (hasOwnerCoords) {
         const customerLoc = { lat: parseFloat(order.pickup_lat), lng: parseFloat(order.pickup_lng) };
@@ -477,6 +469,7 @@ exports.inputWeight = async (req, res) => {
     // Prioritas 2: Manual distance dari request body (fallback)
     if (distance_km === null && manualDistanceKm !== undefined && manualDistanceKm !== null) {
       if (!isManualDistanceAllowed()) {
+        await connection.rollback();
         return res.status(422).json({
           success: false,
           message: 'Koordinat tidak lengkap dan manual distance tidak diizinkan. Pastikan koordinat pickup customer dan owner tersedia, atau set ALLOW_MANUAL_DISTANCE=true di .env.'
@@ -488,6 +481,7 @@ exports.inputWeight = async (req, res) => {
 
     // Prioritas 3: Error
     if (distance_km === null) {
+      await connection.rollback();
       return res.status(422).json({
         success: false,
         message: 'Tidak dapat menghitung jarak. Koordinat pickup customer dan/atau owner tidak lengkap. Pastikan data lat/lng tersedia, atau kirim distance_km manual di request body (jika ALLOW_MANUAL_DISTANCE=true).'
@@ -505,9 +499,6 @@ exports.inputWeight = async (req, res) => {
     const owner_earning = wkg * price_per_kg_owner;
     const courier_earning = distance_km * 2 * 1250;
     const total_amount = service_fee + delivery_fee;
-
-    const connection = await pool.getConnection();
-    await connection.beginTransaction();
 
     // Update order dengan kalkulasi
     await connection.query(
@@ -528,7 +519,6 @@ exports.inputWeight = async (req, res) => {
       `Pesanan ${order_id} sudah dihitung. Total: Rp${total_amount.toLocaleString('id-ID')}. Silakan lakukan pembayaran.`);
 
     await connection.commit();
-    connection.release();
 
     res.json({
       success: true,
@@ -548,15 +538,17 @@ exports.inputWeight = async (req, res) => {
       }
     });
   } catch (err) {
+    await connection.rollback();
     console.error('inputWeight error:', err.message);
     res.status(500).json({ success: false, message: 'Server error' });
+  } finally {
+    connection.release();
   }
 };
 
 // ============================================
 // 3.7. Aktifkan Fase Delivery (Owner)
 // PATCH /orders/:order_id/activate-delivery
-// Auth: Bearer Token (role: owner, verified)
 // ============================================
 exports.activateDelivery = async (req, res) => {
   const { order_id } = req.params;
@@ -605,7 +597,6 @@ exports.activateDelivery = async (req, res) => {
 // ============================================
 // 3.8. Track Order
 // GET /orders/:order_id/tracking
-// Auth: Bearer Token (customer owner, order owner, assigned courier, admin)
 // ============================================
 exports.trackOrder = async (req, res) => {
   const { order_id } = req.params;
@@ -613,7 +604,6 @@ exports.trackOrder = async (req, res) => {
   const userRole = req.user.role;
 
   try {
-    // Cek order
     const [orders] = await pool.query('SELECT * FROM orders WHERE order_id = ?', [order_id]);
     if (orders.length === 0) {
       return res.status(404).json({ success: false, message: 'Order not found' });
@@ -683,9 +673,7 @@ exports.trackOrder = async (req, res) => {
 // ============================================
 // 3.9. Customer Konfirmasi Pesanan Selesai
 // PATCH /orders/:order_id/complete
-// Auth: Bearer Token (role: customer)
-// HANYA customer pemilik order yang boleh menyelesaikan
-// IDEMPOTENT: jika sudah COMPLETED, return success tanpa proses ulang
+// FIX: SELECT ... FOR UPDATE untuk race condition
 // ============================================
 exports.completeOrder = async (req, res) => {
   const { order_id } = req.params;
@@ -695,10 +683,10 @@ exports.completeOrder = async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    const [orders] = await connection.query('SELECT * FROM orders WHERE order_id = ?', [order_id]);
+    // FIX: SELECT ... FOR UPDATE — lock row untuk cegah race condition
+    const [orders] = await connection.query('SELECT * FROM orders WHERE order_id = ? FOR UPDATE', [order_id]);
     if (orders.length === 0) {
       await connection.rollback();
-      connection.release();
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
@@ -707,14 +695,12 @@ exports.completeOrder = async (req, res) => {
     // Hanya customer pemilik order
     if (order.customer_id !== customer_id) {
       await connection.rollback();
-      connection.release();
       return res.status(403).json({ success: false, message: 'Forbidden: only the customer who owns this order can complete it' });
     }
 
     // IDEMPOTENT: jika sudah COMPLETED, return success
     if (order.status === 'COMPLETED') {
       await connection.rollback();
-      connection.release();
       return res.json({
         success: true,
         message: 'Order already completed',
@@ -724,7 +710,6 @@ exports.completeOrder = async (req, res) => {
 
     if (order.status !== 'DELIVERED') {
       await connection.rollback();
-      connection.release();
       return res.status(400).json({ success: false, message: 'Order must be DELIVERED before completing' });
     }
 
@@ -738,7 +723,6 @@ exports.completeOrder = async (req, res) => {
     );
 
     // 3. Release pending balance → available balance
-    // HANYA untuk owner dan courier (bukan admin — admin sudah available saat payment)
     const [pendingTxns] = await connection.query(
       `SELECT wt.transaction_id, wt.wallet_id, wt.amount, w.user_id, w.role
        FROM wallet_transactions wt
@@ -760,7 +744,7 @@ exports.completeOrder = async (req, res) => {
       releasedTo[txn.role] = { amount: parseFloat(txn.amount), wallet_id: txn.wallet_id };
     }
 
-    // 4. Update courier assignment delivery_status to DONE if not already
+    // 4. Update courier assignment delivery_status to DONE
     await connection.query(
       `UPDATE courier_assignments SET delivery_status = 'DONE' WHERE order_id = ? AND (delivery_status IS NULL OR delivery_status != 'DONE')`,
       [order_id]
@@ -778,7 +762,6 @@ exports.completeOrder = async (req, res) => {
     }
 
     await connection.commit();
-    connection.release();
 
     res.json({
       success: true,
@@ -793,16 +776,16 @@ exports.completeOrder = async (req, res) => {
     });
   } catch (err) {
     await connection.rollback();
-    connection.release();
     console.error('completeOrder error:', err.message);
     res.status(500).json({ success: false, message: 'Server error' });
+  } finally {
+    connection.release();
   }
 };
 
 // ============================================
 // 9.1. Riwayat Transaksi Customer
 // GET /orders/my-orders/history
-// Auth: Bearer Token (role: customer)
 // ============================================
 exports.getOrderHistory = async (req, res) => {
   const customer_id = req.user.id;

@@ -40,7 +40,7 @@
 - **Owner/courier harus diverifikasi admin** sebelum bisa menggunakan fitur utama.
 - **Distance dihitung dengan Haversine Formula** dari koordinat GPS pickup customer ke koordinat owner. Tidak menggunakan Google Maps API.
 - Jika koordinat tidak lengkap, owner bisa kirim `distance_km` manual di request body (jika `ALLOW_MANUAL_DISTANCE=true` di `.env`).
-- **Payment signature** di development bisa diskip jika `PAYMENT_GATEWAY_SECRET=change_this_payment_secret`.
+- **Payment** menggunakan Midtrans Sandbox (SHA512 signature). Untuk development tanpa Midtrans key, set `USE_DUMMY_PAYMENT=true` di `.env` untuk mode dummy payment.
 
 ---
 
