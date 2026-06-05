@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const midtransClient = require('midtrans-client');
 const pool = require('../config/db');
 const { createNotification } = require('../helpers/notification');
 const { isValidEnum } = require('../helpers/validators');
@@ -10,9 +11,18 @@ const STATUS_ORDER = [
 ];
 
 // ============================================
+// Midtrans Snap Client (Sandbox)
+// ============================================
+const snap = new midtransClient.Snap({
+  isProduction: false,
+  serverKey: process.env.MIDTRANS_SERVER_KEY || '',
+  clientKey: '' // Client key optional untuk backend
+});
+
+// ============================================
 // 4.1. Lihat Invoice
 // GET /payments/invoice/:invoice_id
-// Auth: Bearer Token (role: customer)
+// Auth: Bearer Token (customer/owner/admin)
 // Customer hanya bisa lihat invoice miliknya
 // ============================================
 exports.getInvoice = async (req, res) => {
@@ -63,9 +73,15 @@ exports.getInvoice = async (req, res) => {
 };
 
 // ============================================
-// 4.2. Bayar Invoice
+// 4.2. Bayar Invoice (Midtrans Snap)
 // POST /payments
 // Auth: Bearer Token (role: customer)
+//
+// Flow:
+//   1. Customer POST /payments → backend buat transaksi Midtrans Snap
+//   2. Backend return snap_token + redirect_url
+//   3. Frontend buka Snap payment page (redirect/popup)
+//   4. Setelah bayar, Midtrans kirim notification ke POST /payments/callback
 // ============================================
 exports.createPayment = async (req, res) => {
   const { invoice_id, payment_method } = req.body;
@@ -74,14 +90,6 @@ exports.createPayment = async (req, res) => {
   // Validasi
   const errors = {};
   if (!invoice_id) errors.invoice_id = ['invoice_id wajib diisi'];
-  if (!payment_method) {
-    errors.payment_method = ['payment_method wajib diisi'];
-  } else {
-    const validMethods = ['virtual_account', 'transfer', 'e_wallet'];
-    if (!isValidEnum(payment_method, validMethods)) {
-      errors.payment_method = [`payment_method harus salah satu: ${validMethods.join(', ')}. Cash payment belum didukung untuk pembayaran online.`];
-    }
-  }
 
   if (Object.keys(errors).length > 0) {
     return res.status(422).json({ success: false, message: 'Validation error', errors });
@@ -90,7 +98,7 @@ exports.createPayment = async (req, res) => {
   try {
     // Cek invoice exists
     const [invoices] = await pool.query(
-      `SELECT i.*, o.customer_id FROM invoices i JOIN orders o ON i.order_id = o.order_id WHERE i.invoice_id = ?`,
+      `SELECT i.*, o.customer_id, o.order_id FROM invoices i JOIN orders o ON i.order_id = o.order_id WHERE i.invoice_id = ?`,
       [invoice_id]
     );
     if (invoices.length === 0) {
@@ -112,72 +120,154 @@ exports.createPayment = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invoice amount not yet calculated. Owner must input weight first.' });
     }
 
-    const paymentId = `PAY${Date.now()}`;
-    const expiredAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const vaNumber = '8808' + Math.floor(Math.random() * 10000000000).toString().padStart(10, '0');
+    // Ambil data customer untuk Midtrans
+    const [customers] = await pool.query('SELECT full_name, email FROM users WHERE user_id = ?', [user_id]);
+    const customer = customers[0];
 
+    const paymentId = `PAY${Date.now()}`;
+    const grossAmount = Math.round(parseFloat(invoice.amount));
+
+    // Simpan payment record dulu (status = pending)
     await pool.query(
-      `INSERT INTO payments (payment_id, invoice_id, user_id, payment_method, amount, status, va_number, expired_at) 
-       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
-      [paymentId, invoice_id, user_id, payment_method, invoice.amount, vaNumber, expiredAt]
+      `INSERT INTO payments (payment_id, invoice_id, user_id, payment_method, amount, status) 
+       VALUES (?, ?, ?, ?, ?, 'pending')`,
+      [paymentId, invoice_id, user_id, payment_method || 'midtrans_snap', grossAmount]
+    );
+
+    // Buat transaksi Midtrans Snap
+    const parameter = {
+      transaction_details: {
+        order_id: paymentId,
+        gross_amount: grossAmount
+      },
+      item_details: [
+        {
+          id: invoice.order_id,
+          price: Math.round(parseFloat(invoice.service_fee) || 0),
+          quantity: 1,
+          name: 'Service Fee - Laundry'
+        },
+        {
+          id: `${invoice.order_id}-delivery`,
+          price: Math.round(parseFloat(invoice.delivery_fee) || 0),
+          quantity: 1,
+          name: 'Delivery Fee'
+        }
+      ],
+      customer_details: {
+        first_name: customer.full_name,
+        email: customer.email
+      },
+      callbacks: {
+        finish: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/payment/finish`
+      }
+    };
+
+    const midtransResponse = await snap.createTransaction(parameter);
+
+    // Update payment dengan snap token
+    await pool.query(
+      `UPDATE payments SET va_number = ? WHERE payment_id = ?`,
+      [midtransResponse.token, paymentId]
     );
 
     res.status(201).json({
       success: true,
-      message: 'Payment created',
+      message: 'Payment created via Midtrans Snap',
       data: {
         payment_id: paymentId,
-        amount: parseFloat(invoice.amount),
-        va_number: vaNumber,
-        expired_at: expiredAt.toISOString(),
+        invoice_id,
+        order_id: invoice.order_id,
+        amount: grossAmount,
+        snap_token: midtransResponse.token,
+        redirect_url: midtransResponse.redirect_url,
         status: 'pending'
       }
     });
   } catch (err) {
     console.error('createPayment error:', err.message);
-    res.status(500).json({ success: false, message: 'Server error' });
+
+    // Midtrans error detail
+    if (err.ApiResponse) {
+      console.error('Midtrans API Response:', JSON.stringify(err.ApiResponse));
+    }
+
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
   }
 };
 
 // ============================================
-// 4.3. Payment Callback (Payment Gateway)
+// 4.3. Payment Notification Callback (Midtrans)
 // POST /payments/callback
-// Auth: Validasi via HMAC-SHA256 signature
+// Auth: Validasi via Midtrans Signature Key
 //
-// Signature format:
-//   Header: X-Payment-Signature
-//   Canonical string: payment_id|status|amount|timestamp
-//   HMAC-SHA256 dengan PAYMENT_GATEWAY_SECRET
+// Midtrans mengirim notification ke URL ini setiap kali status berubah.
+// Signature key: SHA512(order_id + status_code + gross_amount + server_key)
 //
 // IDEMPOTENT: payment yang sudah success tidak akan diproses ulang
+//
+// Midtrans notification body contoh:
+// {
+//   "transaction_type": "on-us",
+//   "transaction_time": "2026-06-05 10:00:00",
+//   "transaction_status": "settlement",   ← paid
+//   "transaction_id": "xxx",
+//   "status_message": "midtrans payment notification",
+//   "status_code": "200",
+//   "signature_key": "SHA512(...)",
+//   "order_id": "PAY1234567890",
+//   "gross_amount": "47200.00",
+//   "payment_type": "bank_transfer",
+//   "fraud_status": "accept"
+// }
 // ============================================
 exports.paymentCallback = async (req, res) => {
-  const { payment_id, status, amount, timestamp } = req.body;
+  const {
+    order_id: paymentId,
+    status_code: statusCode,
+    gross_amount: grossAmount,
+    signature_key: signatureKey,
+    transaction_status: transactionStatus,
+    fraud_status: fraudStatus
+  } = req.body;
 
-  // Validasi input
-  if (!payment_id || !status) {
-    return res.status(400).json({ success: false, message: 'payment_id and status required' });
+  // Validasi input dasar
+  if (!paymentId || !statusCode || !grossAmount || !signatureKey) {
+    return res.status(400).json({ success: false, message: 'Missing required notification fields' });
   }
 
-  if (!['success', 'failed'].includes(status)) {
-    return res.status(400).json({ success: false, message: 'Invalid payment status. Must be success or failed.' });
+  // Validasi Midtrans Signature Key
+  // Format: SHA512(order_id + status_code + gross_amount + server_key)
+  const serverKey = process.env.MIDTRANS_SERVER_KEY || '';
+  const expectedSignature = crypto
+    .createHash('sha512')
+    .update(paymentId + statusCode + grossAmount + serverKey)
+    .digest('hex');
+
+  if (signatureKey !== expectedSignature) {
+    console.warn('[Payment] Invalid signature for payment:', paymentId);
+    return res.status(403).json({ success: false, message: 'Invalid signature key' });
   }
 
-  // Validasi signature
-  const secret = process.env.PAYMENT_GATEWAY_SECRET;
-  if (secret && secret !== 'change_this_payment_secret') {
-    const signature = req.headers['x-payment-signature'];
-    if (!signature) {
-      return res.status(401).json({ success: false, message: 'Missing payment signature' });
+  // Tentukan status pembayaran dari Midtrans transaction_status
+  // settlement / capture = success
+  // deny / cancel / expire = failed
+  // pending = masih pending (abaikan, tunggu settlement)
+  let paymentStatus;
+  if (transactionStatus === 'settlement' || transactionStatus === 'capture') {
+    // capture: khusus credit card, cek fraud_status
+    if (transactionStatus === 'capture' && fraudStatus !== 'accept') {
+      paymentStatus = 'failed';
+    } else {
+      paymentStatus = 'success';
     }
-
-    // Canonical string: payment_id|status|amount|timestamp
-    const canonicalString = `${payment_id}|${status}|${amount || ''}|${timestamp || ''}`;
-    const expectedSignature = crypto.createHmac('sha256', secret).update(canonicalString).digest('hex');
-
-    if (signature !== expectedSignature) {
-      return res.status(403).json({ success: false, message: 'Invalid payment signature' });
-    }
+  } else if (transactionStatus === 'deny' || transactionStatus === 'cancel' || transactionStatus === 'expire') {
+    paymentStatus = 'failed';
+  } else if (transactionStatus === 'pending') {
+    // Pending — acknowledge tapi jangan proses wallet
+    return res.json({ success: true, message: 'Notification received. Payment still pending.' });
+  } else {
+    return res.json({ success: true, message: `Notification received. Unhandled status: ${transactionStatus}` });
   }
 
   const connection = await pool.getConnection();
@@ -185,7 +275,7 @@ exports.paymentCallback = async (req, res) => {
     await connection.beginTransaction();
 
     // 1. Cek payment
-    const [payments] = await connection.query('SELECT * FROM payments WHERE payment_id = ?', [payment_id]);
+    const [payments] = await connection.query('SELECT * FROM payments WHERE payment_id = ?', [paymentId]);
     if (payments.length === 0) {
       await connection.rollback();
       connection.release();
@@ -201,27 +291,19 @@ exports.paymentCallback = async (req, res) => {
       return res.json({ success: true, message: 'Payment already processed as success. No action taken.' });
     }
 
-    // Jika payment sudah failed, jangan proses lagi
-    if (payment.status === 'failed' && status === 'success') {
-      await connection.rollback();
-      connection.release();
-      return res.status(400).json({ success: false, message: 'Cannot mark a failed payment as success' });
-    }
-
-    if (status === 'failed') {
-      await connection.query('UPDATE payments SET status = ? WHERE payment_id = ?', ['failed', payment_id]);
-      // JANGAN update invoice ke paid dan JANGAN distribusi wallet
+    if (paymentStatus === 'failed') {
+      await connection.query('UPDATE payments SET status = ? WHERE payment_id = ?', ['failed', paymentId]);
       await connection.commit();
       connection.release();
-      return res.json({ success: true, message: 'Callback processed. Payment marked as failed.' });
+      return res.json({ success: true, message: 'Notification processed. Payment marked as failed.' });
     }
 
-    // --- Status = success ---
+    // --- Status = success (settlement/capture) ---
 
     // 2. Update payment
     await connection.query(
-      'UPDATE payments SET status = ?, paid_at = NOW() WHERE payment_id = ?',
-      ['success', payment_id]
+      'UPDATE payments SET status = ?, payment_method = ?, paid_at = NOW() WHERE payment_id = ?',
+      ['success', req.body.payment_type || 'midtrans', paymentId]
     );
 
     // 3. Update invoice → paid
@@ -329,9 +411,9 @@ exports.paymentCallback = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Callback processed successfully.',
+      message: 'Notification processed successfully.',
       data: {
-        payment_id,
+        payment_id: paymentId,
         status: 'success',
         order_id,
         wallet_distributed: existingTxns.length === 0

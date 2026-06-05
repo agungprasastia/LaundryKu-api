@@ -42,8 +42,8 @@ DB_PASSWORD=
 DB_NAME=laundryku_db
 DB_PORT=3306
 JWT_SECRET=change_this_secret
-PAYMENT_GATEWAY_SECRET=change_this_payment_secret
 ALLOW_MANUAL_DISTANCE=true
+MIDTRANS_SERVER_KEY=SB-Mid-server-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 ### 3. Install Dependencies
@@ -168,35 +168,45 @@ Sistem **tidak menggunakan Google Maps API**. Jarak dihitung menggunakan **Haver
 
 ---
 
-## Payment
+## Payment (Midtrans Sandbox)
+
+Sistem menggunakan **Midtrans Snap** (Sandbox mode) untuk memproses pembayaran.
 
 ### Membuat Payment
 
 ```
 POST /payments
-{ "invoice_id": "INV...", "payment_method": "virtual_account" }
+{ "invoice_id": "INV..." }
 ```
 
-Payment method yang didukung: `virtual_account`, `transfer`, `e_wallet`
+Response:
+```json
+{
+  "payment_id": "PAY...",
+  "snap_token": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "redirect_url": "https://app.sandbox.midtrans.com/snap/v2/vtweb/...",
+  "status": "pending"
+}
+```
 
-> **Catatan**: `cash` belum didukung untuk pembayaran online. Flow manual confirmation untuk cash belum diimplementasi.
+Frontend/Flutter membuka `redirect_url` atau menggunakan `snap_token` dengan Midtrans Snap SDK.
 
-### Payment Callback (Gateway)
+Semua metode pembayaran yang tersedia di Midtrans Sandbox (VA, GoPay, QRIS, dll) otomatis tampil.
+
+### Payment Notification Callback (Midtrans)
 
 ```
 POST /payments/callback
-X-Payment-Signature: <hmac_signature>
-{ "payment_id": "PAY...", "status": "success", "amount": 43000, "timestamp": 1234567890 }
 ```
 
-**Signature**:
-- Canonical string: `payment_id|status|amount|timestamp`
-- HMAC-SHA256 dengan `PAYMENT_GATEWAY_SECRET`
-- Di-set di header `X-Payment-Signature`
+Midtrans mengirim notification otomatis ke endpoint ini. URL callback diatur di:
+**Midtrans Dashboard → Settings → Payment → Notification URL**
 
-> **Development**: Jika `PAYMENT_GATEWAY_SECRET` masih `change_this_payment_secret`, signature tidak divalidasi.
+Set ke: `https://<your-domain>/payments/callback`
 
-**Idempotent**: Callback yang sama jika diulang tidak akan membuat wallet transaction dobel.
+**Signature validation**: `SHA512(order_id + status_code + gross_amount + server_key)`
+
+**Idempotent**: Notification yang sama jika diulang tidak akan membuat wallet transaction dobel.
 
 ---
 

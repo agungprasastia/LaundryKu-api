@@ -310,35 +310,45 @@ Authorization: Bearer <customer_token>
 → amount = 47200
 ```
 
-### 8. PAYMENT — Bayar & Callback
+### 8. PAYMENT — Bayar via Midtrans Sandbox
 
 ```
 # Login sebagai Customer
 
-# 8.1 Bayar Invoice
+# 8.1 Bayar Invoice (Midtrans Snap)
 POST /payments
 Authorization: Bearer <customer_token>
 {
-  "invoice_id": "<invoice_id>",
-  "payment_method": "virtual_account"
+  "invoice_id": "<invoice_id>"
 }
-→ Simpan payment_id
+→ Simpan payment_id, snap_token, redirect_url
+→ Buka redirect_url di browser untuk simulasi pembayaran Midtrans Sandbox
+→ Atau gunakan snap_token di Flutter dengan Midtrans Snap SDK
 
-# 8.2 Simulasi Callback Success
-# Di development (PAYMENT_GATEWAY_SECRET = change_this_payment_secret), signature tidak divalidasi
+# 8.2 Simulasi Callback Midtrans (Sandbox)
+# Midtrans Sandbox akan mengirim notification otomatis ke /payments/callback
+# setelah pembayaran di halaman Snap selesai.
+#
+# Untuk test manual, kirim format notification Midtrans:
 POST /payments/callback
 {
-  "payment_id": "<payment_id>",
-  "status": "success",
-  "amount": 47200,
-  "timestamp": 1234567890
+  "order_id": "<payment_id>",
+  "status_code": "200",
+  "gross_amount": "47200.00",
+  "signature_key": "<sha512_signature>",
+  "transaction_status": "settlement",
+  "payment_type": "bank_transfer",
+  "fraud_status": "accept"
 }
+
+# Cara generate signature_key:
+# SHA512(<payment_id> + "200" + "47200.00" + <MIDTRANS_SERVER_KEY>)
 → Order status → PROCESSING
 → Wallet distributed: true
 
 # 8.3 Callback Ulang (test idempotent)
 POST /payments/callback
-{ "payment_id": "<payment_id>", "status": "success" }
+{ ...same body as above... }
 → "Payment already processed as success. No action taken."
 → Tidak ada wallet transaction baru
 ```
@@ -509,27 +519,39 @@ Authorization: Bearer <courier_token>
 
 ---
 
-## Test Payment Signature (Production)
+## Test Midtrans Signature (Manual Callback)
 
-Untuk test signature saat `PAYMENT_GATEWAY_SECRET` sudah di-set:
+Untuk test callback manual tanpa melalui halaman Snap:
 
 ```javascript
-// Generate signature
+// Generate Midtrans signature_key
 const crypto = require('crypto');
-const secret = 'your_actual_secret';
-const canonicalString = 'PAY123|success|47200|1234567890';
-const signature = crypto.createHmac('sha256', secret).update(canonicalString).digest('hex');
-console.log(signature);
-// Gunakan nilai ini sebagai header X-Payment-Signature
+const orderId = 'PAY1234567890';        // payment_id dari createPayment
+const statusCode = '200';                // 200 = success
+const grossAmount = '47200.00';          // harus string dengan .00
+const serverKey = 'SB-Mid-server-xxxxx'; // MIDTRANS_SERVER_KEY dari .env
+
+const signatureKey = crypto
+  .createHash('sha512')
+  .update(orderId + statusCode + grossAmount + serverKey)
+  .digest('hex');
+
+console.log(signatureKey);
 ```
 
 ```
 POST /payments/callback
-X-Payment-Signature: <generated_signature>
 {
-  "payment_id": "PAY123",
-  "status": "success",
-  "amount": 47200,
-  "timestamp": 1234567890
+  "order_id": "PAY1234567890",
+  "status_code": "200",
+  "gross_amount": "47200.00",
+  "signature_key": "<generated_signature>",
+  "transaction_status": "settlement",
+  "payment_type": "bank_transfer",
+  "fraud_status": "accept"
 }
 ```
+
+> **Tip**: Di Midtrans Sandbox, cara termudah adalah langsung bayar di halaman Snap.
+> Midtrans akan otomatis mengirim notification ke endpoint callback Anda.
+> Untuk development lokal, gunakan [ngrok](https://ngrok.com) untuk expose localhost.
