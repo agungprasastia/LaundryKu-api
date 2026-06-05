@@ -42,6 +42,8 @@
 - Jika koordinat tidak lengkap, owner bisa kirim `distance_km` manual di request body (jika `ALLOW_MANUAL_DISTANCE=true` di `.env`).
 - **Payment** menggunakan Midtrans Sandbox (SHA512 signature). Untuk development tanpa Midtrans key, set `USE_DUMMY_PAYMENT=true` di `.env` untuk mode dummy payment.
 
+> ⚠️ **WARNING**: `USE_DUMMY_PAYMENT=true` **hanya untuk development/testing lokal**. Jangan gunakan di production atau demo publik. Dummy mode melewati verifikasi payment gateway dan menerima callback tanpa validasi signature Midtrans. Untuk production, set `USE_DUMMY_PAYMENT=false` dan gunakan `MIDTRANS_SERVER_KEY` / `MIDTRANS_CLIENT_KEY` yang valid.
+
 ---
 
 ## Flow Testing Lengkap

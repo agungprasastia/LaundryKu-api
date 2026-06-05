@@ -104,9 +104,19 @@ exports.withdraw = async (req, res) => {
     return res.status(422).json({ success: false, message: 'Validation error', errors: { destination: ['bank_account_number atau e_wallet_number wajib diisi'] } });
   }
 
+  let connection;
+
   try {
-    const [wallets] = await pool.query('SELECT * FROM wallets WHERE user_id = ?', [user_id]);
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    // Lock wallet row untuk mencegah race condition double withdraw
+    const [wallets] = await connection.query(
+      'SELECT * FROM wallets WHERE user_id = ? FOR UPDATE',
+      [user_id]
+    );
     if (wallets.length === 0) {
+      await connection.rollback();
       return res.status(404).json({ success: false, message: 'Wallet not found' });
     }
 
@@ -114,13 +124,11 @@ exports.withdraw = async (req, res) => {
     const withdrawAmount = parseFloat(amount);
 
     if (withdrawAmount > parseFloat(wallet.available_balance)) {
+      await connection.rollback();
       return res.status(400).json({ success: false, message: 'Insufficient available balance' });
     }
 
     const withdrawId = generateId('WD');
-
-    const connection = await pool.getConnection();
-    await connection.beginTransaction();
 
     // Kurangi available_balance saat request (deduct-on-request approach)
     await connection.query(
@@ -150,9 +158,8 @@ exports.withdraw = async (req, res) => {
     }
 
     await connection.commit();
-    connection.release();
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: 'Withdraw request submitted',
       data: {
@@ -163,8 +170,11 @@ exports.withdraw = async (req, res) => {
       }
     });
   } catch (err) {
+    if (connection) await connection.rollback();
     console.error('withdraw error:', err.message);
-    res.status(500).json({ success: false, message: 'Server error' });
+    return res.status(500).json({ success: false, message: 'Server error' });
+  } finally {
+    if (connection) connection.release();
   }
 };
 

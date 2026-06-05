@@ -191,19 +191,27 @@ exports.processWithdraw = async (req, res) => {
     return res.status(422).json({ success: false, message: 'status harus success atau failed' });
   }
 
+  let connection;
+
   try {
-    const [withdrawals] = await pool.query('SELECT * FROM withdrawals WHERE withdraw_id = ?', [withdraw_id]);
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    // Lock withdrawal row untuk mencegah double processing oleh 2 admin
+    const [withdrawals] = await connection.query(
+      'SELECT * FROM withdrawals WHERE withdraw_id = ? FOR UPDATE',
+      [withdraw_id]
+    );
     if (withdrawals.length === 0) {
+      await connection.rollback();
       return res.status(404).json({ success: false, message: 'Withdrawal not found' });
     }
 
     const withdrawal = withdrawals[0];
     if (withdrawal.status !== 'pending') {
+      await connection.rollback();
       return res.status(422).json({ success: false, message: 'Withdrawal already processed' });
     }
-
-    const connection = await pool.getConnection();
-    await connection.beginTransaction();
 
     await connection.query(
       'UPDATE withdrawals SET status = ?, note = ?, processed_at = NOW() WHERE withdraw_id = ?',
@@ -227,9 +235,8 @@ exports.processWithdraw = async (req, res) => {
     }
 
     await connection.commit();
-    connection.release();
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Withdraw processed',
       data: {
@@ -239,8 +246,11 @@ exports.processWithdraw = async (req, res) => {
       }
     });
   } catch (err) {
+    if (connection) await connection.rollback();
     console.error('processWithdraw error:', err.message);
-    res.status(500).json({ success: false, message: 'Server error' });
+    return res.status(500).json({ success: false, message: 'Server error' });
+  } finally {
+    if (connection) connection.release();
   }
 };
 

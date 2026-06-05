@@ -68,7 +68,7 @@ exports.createOrder = async (req, res) => {
       `INSERT INTO orders (order_id, customer_id, owner_id, service_id, pickup_address, pickup_lat, pickup_lng, pickup_scheduled_at, 
        price_per_kg_owner, price_per_kg_customer, status) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'WAITING_OWNER_CONFIRMATION')`,
-      [orderId, customer_id, service.owner_id, service_id, pickup_address || null, pickup_lat || null, pickup_lng || null, 
+      [orderId, customer_id, service.owner_id, service_id, pickup_address || null, pickup_lat ?? null, pickup_lng ?? null, 
        pickup_scheduled_at || null, service.price_per_kg_owner, service.price_per_kg_customer]
     );
 
@@ -219,29 +219,42 @@ exports.getOrderDetail = async (req, res) => {
       [order_id]
     );
 
+    // Base response — semua role dapat ini
+    const data = {
+      order_id: order.order_id,
+      customer_id: order.customer_id,
+      owner_id: order.owner_id,
+      status: order.status,
+      service: { name: order.service_name, price_per_kg_customer: order.service_price },
+      courier,
+      weight_kg: order.weight_kg,
+      distance_km: order.distance_km,
+      service_fee: order.service_fee,
+      delivery_fee: order.delivery_fee,
+      total_amount: order.total_amount,
+      pickup_address: order.pickup_address,
+      pickup_scheduled_at: order.pickup_scheduled_at,
+      status_history: statusHistory,
+      created_at: order.created_at
+    };
+
+    // Financial fields berdasarkan role
+    if (userRole === 'admin') {
+      data.admin_commission = order.admin_commission;
+      data.owner_earning = order.owner_earning;
+      data.courier_earning = order.courier_earning;
+    } else if (userRole === 'owner') {
+      data.owner_earning = order.owner_earning;
+      data.courier_earning = order.courier_earning;
+    } else if (userRole === 'courier') {
+      data.courier_earning = order.courier_earning;
+    }
+    // customer: tidak dapat admin_commission, owner_earning, courier_earning
+
     res.json({
       success: true,
       message: 'Success',
-      data: {
-        order_id: order.order_id,
-        customer_id: order.customer_id,
-        owner_id: order.owner_id,
-        status: order.status,
-        service: { name: order.service_name, price_per_kg_customer: order.service_price },
-        courier,
-        weight_kg: order.weight_kg,
-        distance_km: order.distance_km,
-        service_fee: order.service_fee,
-        delivery_fee: order.delivery_fee,
-        admin_commission: order.admin_commission,
-        owner_earning: order.owner_earning,
-        courier_earning: order.courier_earning,
-        total_amount: order.total_amount,
-        pickup_address: order.pickup_address,
-        pickup_scheduled_at: order.pickup_scheduled_at,
-        status_history: statusHistory,
-        created_at: order.created_at
-      }
+      data
     });
   } catch (err) {
     console.error('getOrderDetail error:', err.message);

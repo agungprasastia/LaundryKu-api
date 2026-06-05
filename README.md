@@ -50,6 +50,21 @@ FRONTEND_URL=http://localhost:3000
 
 > **Note**: Set `USE_DUMMY_PAYMENT=true` untuk development tanpa Midtrans key. Payment akan return dummy snap_token tanpa memanggil Midtrans API. Set ke `false` untuk menggunakan Midtrans Sandbox yang sesungguhnya.
 
+> ⚠️ **WARNING — DUMMY PAYMENT HANYA UNTUK DEVELOPMENT/TESTING LOKAL**
+>
+> `USE_DUMMY_PAYMENT=true` **TIDAK AMAN** untuk production atau demo publik karena:
+> - Melewati verifikasi payment gateway (Midtrans Snap API tidak dipanggil)
+> - Callback menerima status pembayaran tanpa validasi signature dari Midtrans
+> - Siapapun bisa mengirim callback palsu dan memicu distribusi wallet tanpa pembayaran nyata
+>
+> Untuk **production/demo publik**, wajib set:
+> ```env
+> USE_DUMMY_PAYMENT=false
+> MIDTRANS_SERVER_KEY=<server_key_asli>
+> MIDTRANS_CLIENT_KEY=<client_key_asli>
+> ```
+> dan pastikan signature Midtrans divalidasi pada setiap callback.
+
 ### 3. Install Dependencies
 
 ```bash
