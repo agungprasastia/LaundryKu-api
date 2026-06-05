@@ -52,7 +52,6 @@ exports.createOrder = async (req, res) => {
     // 1. Cek service exists dan active
     const [services] = await connection.query('SELECT * FROM services WHERE service_id = ? AND is_active = 1', [service_id]);
     if (services.length === 0) {
-      connection.release();
       return res.status(404).json({ success: false, message: 'Service not found or inactive' });
     }
 

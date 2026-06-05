@@ -3,8 +3,8 @@ const router = express.Router();
 const courierController = require('../controllers/courierController');
 const { authenticate, authorize, requireVerifiedAccount } = require('../middleware/auth');
 
-// Courier tersedia (untuk owner/admin saat assign)
-router.get('/available', authenticate, authorize(['owner', 'admin']), courierController.getAvailableCouriers);
+// Courier tersedia (untuk owner/admin saat assign) — owner harus verified
+router.get('/available', authenticate, authorize(['owner', 'admin']), requireVerifiedAccount, courierController.getAvailableCouriers);
 
 // Update lokasi kurir — harus verified
 router.patch('/me/location', authenticate, authorize('courier'), requireVerifiedAccount, courierController.updateLocation);

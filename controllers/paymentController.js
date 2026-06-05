@@ -198,14 +198,16 @@ exports.createPayment = async (req, res) => {
       });
     }
 
-    // Simpan payment record dulu (status = pending)
-    await pool.query(
-      `INSERT INTO payments (payment_id, invoice_id, user_id, payment_method, amount, status) 
-       VALUES (?, ?, ?, 'midtrans_snap', ?, 'pending')`,
-      [paymentId, invoice_id, user_id, grossAmount]
-    );
+    // Validasi server key — jangan proses dengan key kosong/default
+    const serverKey = process.env.MIDTRANS_SERVER_KEY || '';
+    if (!serverKey || serverKey === 'SB-Mid-server-xxxxxxxxxxxxxxxxxxxxxxxx') {
+      return res.status(503).json({
+        success: false,
+        message: 'MIDTRANS_SERVER_KEY belum dikonfigurasi. Set key yang valid di .env atau gunakan USE_DUMMY_PAYMENT=true.'
+      });
+    }
 
-    // Buat transaksi Midtrans Snap
+    // Buat transaksi Midtrans Snap DULU — jika gagal, jangan simpan payment record
     const parameter = {
       transaction_details: {
         order_id: paymentId,
@@ -234,12 +236,26 @@ exports.createPayment = async (req, res) => {
       }
     };
 
-    const midtransResponse = await snap.createTransaction(parameter);
+    let midtransResponse;
+    try {
+      midtransResponse = await snap.createTransaction(parameter);
+    } catch (snapErr) {
+      console.error('Midtrans Snap error:', snapErr.message);
+      if (snapErr.ApiResponse) {
+        console.error('Midtrans API Response:', JSON.stringify(snapErr.ApiResponse));
+      }
+      return res.status(502).json({
+        success: false,
+        message: 'Payment gateway error. Coba lagi nanti.',
+        error: snapErr.message
+      });
+    }
 
-    // Update payment dengan snap token
+    // Snap sukses — sekarang baru simpan payment record dengan snap token
     await pool.query(
-      `UPDATE payments SET va_number = ? WHERE payment_id = ?`,
-      [midtransResponse.token, paymentId]
+      `INSERT INTO payments (payment_id, invoice_id, user_id, payment_method, amount, status, va_number) 
+       VALUES (?, ?, ?, 'midtrans_snap', ?, 'pending', ?)`,
+      [paymentId, invoice_id, user_id, grossAmount, midtransResponse.token]
     );
 
     res.status(201).json({
@@ -257,10 +273,7 @@ exports.createPayment = async (req, res) => {
     });
   } catch (err) {
     console.error('createPayment error:', err.message);
-    if (err.ApiResponse) {
-      console.error('Midtrans API Response:', JSON.stringify(err.ApiResponse));
-    }
-    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
@@ -317,6 +330,14 @@ exports.paymentCallback = async (req, res) => {
 
   // Validasi Midtrans Signature Key
   const serverKey = process.env.MIDTRANS_SERVER_KEY || '';
+  if (!serverKey || serverKey === 'SB-Mid-server-xxxxxxxxxxxxxxxxxxxxxxxx') {
+    console.error('[Payment] MIDTRANS_SERVER_KEY not configured. Cannot validate callback signature.');
+    return res.status(503).json({
+      success: false,
+      message: 'Server key not configured. Cannot process Midtrans callback.'
+    });
+  }
+
   const expectedSignature = crypto
     .createHash('sha512')
     .update(paymentId + statusCode + grossAmount + serverKey)
