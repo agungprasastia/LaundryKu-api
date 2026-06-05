@@ -19,7 +19,7 @@ const walletRoutes = require('./routes/walletRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const ownerRoutes = require('./routes/ownerRoutes');
 
-// Gunakan Routes (sesuai spec PDF v2)
+// Gunakan Routes
 app.use('/auth', authRoutes);
 app.use('/services', serviceRoutes);
 app.use('/orders', orderRoutes);
@@ -31,7 +31,18 @@ app.use('/admin', adminRoutes);
 app.use('/owner', ownerRoutes);
 
 app.get('/', (req, res) => {
-  res.json({ message: 'API LaundryKu berjalan' });
+  res.json({ success: true, message: 'API LaundryKu berjalan' });
+});
+
+// ============================================
+// Global Error Handler
+// Menangkap error yang tidak tertangani di controller
+// Jangan bocorkan detail error SQL ke client
+// ============================================
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err.message);
+  console.error(err.stack);
+  res.status(500).json({ success: false, message: 'Internal server error' });
 });
 
 const PORT = process.env.PORT || 3000;

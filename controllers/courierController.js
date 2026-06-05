@@ -1,45 +1,60 @@
 const pool = require('../config/db');
+const { createNotification } = require('../helpers/notification');
+const { isValidLatLng } = require('../helpers/validators');
 
 // ============================================
 // 5.1. Update Lokasi Kurir
 // PATCH /couriers/me/location
-// Auth: Bearer Token (role: courier)
+// Auth: Bearer Token (role: courier, verified)
 // ============================================
 exports.updateLocation = async (req, res) => {
   const { lat, lng, assignment_id } = req.body;
   const courier_id = req.user.id;
 
-  if (!lat || !lng || !assignment_id) {
-    return res.status(422).json({
-      message: 'Validation error',
-      errors: {
-        ...((!lat) && { lat: ['lat wajib diisi'] }),
-        ...((!lng) && { lng: ['lng wajib diisi'] }),
-        ...((!assignment_id) && { assignment_id: ['assignment_id wajib diisi'] })
-      }
-    });
+  // Validasi
+  const errors = {};
+  if (lat === undefined || lat === null) errors.lat = ['lat wajib diisi'];
+  if (lng === undefined || lng === null) errors.lng = ['lng wajib diisi'];
+  if (!assignment_id) errors.assignment_id = ['assignment_id wajib diisi'];
+
+  if (Object.keys(errors).length > 0) {
+    return res.status(422).json({ success: false, message: 'Validation error', errors });
+  }
+
+  if (!isValidLatLng(lat, lng)) {
+    return res.status(422).json({ success: false, message: 'lat harus -90..90, lng harus -180..180' });
   }
 
   try {
+    // Cek assignment milik courier ini
+    const [assignments] = await pool.query(
+      'SELECT assignment_id FROM courier_assignments WHERE assignment_id = ? AND courier_id = ?',
+      [assignment_id, courier_id]
+    );
+    if (assignments.length === 0) {
+      return res.status(403).json({ success: false, message: 'Assignment not found or not assigned to you' });
+    }
+
     await pool.query(
       `INSERT INTO courier_locations (courier_id, assignment_id, lat, lng) VALUES (?, ?, ?, ?)`,
       [courier_id, assignment_id, lat, lng]
     );
 
     res.json({
+      success: true,
       message: 'Location updated',
-      data: { courier_id, lat, lng }
+      data: { courier_id, lat: parseFloat(lat), lng: parseFloat(lng) }
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('updateLocation error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
 // ============================================
 // 5.2. Update Status Tugas Kurir
 // PATCH /couriers/tasks/:assignment_id/status
-// Auth: Bearer Token (role: courier)
+// Auth: Bearer Token (role: courier, verified)
 // ============================================
 exports.updateTaskStatus = async (req, res) => {
   const { assignment_id } = req.params;
@@ -47,7 +62,7 @@ exports.updateTaskStatus = async (req, res) => {
   const courier_id = req.user.id;
 
   if (!status) {
-    return res.status(422).json({ message: 'status wajib diisi' });
+    return res.status(422).json({ success: false, message: 'status wajib diisi' });
   }
 
   try {
@@ -57,13 +72,13 @@ exports.updateTaskStatus = async (req, res) => {
     );
 
     if (assignments.length === 0) {
-      return res.status(404).json({ message: 'Assignment not found' });
+      return res.status(404).json({ success: false, message: 'Assignment not found' });
     }
 
     const assignment = assignments[0];
 
     if (assignment.courier_id !== courier_id) {
-      return res.status(403).json({ message: 'Forbidden' });
+      return res.status(403).json({ success: false, message: 'Forbidden' });
     }
 
     const connection = await pool.getConnection();
@@ -71,22 +86,33 @@ exports.updateTaskStatus = async (req, res) => {
 
     let phase = assignment.current_phase;
     let orderStatusUpdate = null;
-    let note = null;
+
+    // Ambil order info untuk notifikasi
+    const [orders] = await connection.query('SELECT * FROM orders WHERE order_id = ?', [assignment.order_id]);
+    const order = orders.length > 0 ? orders[0] : null;
 
     if (phase === 'pickup') {
       // Pickup phase: PICKUP_ON_THE_WAY → LAUNDRY_PICKED
       const validPickup = ['PICKUP_ON_THE_WAY', 'LAUNDRY_PICKED'];
       if (!validPickup.includes(status)) {
+        await connection.rollback();
         connection.release();
         return res.status(422).json({ 
-          message: `Invalid status transition. Current phase: pickup. Valid: ${validPickup.join(', ')}` 
+          success: false,
+          message: `Invalid status for pickup phase. Valid: ${validPickup.join(', ')}` 
         });
       }
 
       // Flow validation
-      if (status === 'LAUNDRY_PICKED' && assignment.pickup_status !== 'PICKUP_ON_THE_WAY') {
+      if (status === 'PICKUP_ON_THE_WAY' && assignment.pickup_status !== null) {
+        await connection.rollback();
         connection.release();
-        return res.status(422).json({ message: 'Must be PICKUP_ON_THE_WAY before LAUNDRY_PICKED' });
+        return res.status(422).json({ success: false, message: 'Pickup already started' });
+      }
+      if (status === 'LAUNDRY_PICKED' && assignment.pickup_status !== 'PICKUP_ON_THE_WAY') {
+        await connection.rollback();
+        connection.release();
+        return res.status(422).json({ success: false, message: 'Must be PICKUP_ON_THE_WAY before LAUNDRY_PICKED' });
       }
 
       await connection.query(
@@ -96,28 +122,48 @@ exports.updateTaskStatus = async (req, res) => {
 
       orderStatusUpdate = status;
 
-      if (status === 'LAUNDRY_PICKED') {
-        note = 'Laundry dalam perjalanan ke tempat cuci';
+      // Notifikasi
+      if (order) {
+        if (status === 'PICKUP_ON_THE_WAY') {
+          await createNotification(connection, order.customer_id, 'Kurir Dalam Perjalanan',
+            `Kurir sedang menuju lokasi Anda untuk mengambil laundry (Order ${assignment.order_id}).`);
+        } else if (status === 'LAUNDRY_PICKED') {
+          await createNotification(connection, order.customer_id, 'Laundry Diambil',
+            `Laundry Anda telah diambil oleh kurir (Order ${assignment.order_id}).`);
+          if (order.owner_id) {
+            await createNotification(connection, order.owner_id, 'Laundry Diambil',
+              `Kurir telah mengambil laundry untuk order ${assignment.order_id}. Silakan input berat setelah menerima.`);
+          }
+        }
       }
 
     } else if (phase === 'delivery') {
       // Delivery phase: DELIVERY_ON_THE_WAY → DELIVERED → DONE
       const validDelivery = ['DELIVERY_ON_THE_WAY', 'DELIVERED', 'DONE'];
       if (!validDelivery.includes(status)) {
+        await connection.rollback();
         connection.release();
         return res.status(422).json({ 
-          message: `Invalid status transition. Current phase: delivery. Valid: ${validDelivery.join(', ')}` 
+          success: false,
+          message: `Invalid status for delivery phase. Valid: ${validDelivery.join(', ')}` 
         });
       }
 
       // Flow validation
-      if (status === 'DELIVERED' && assignment.delivery_status !== 'DELIVERY_ON_THE_WAY') {
+      if (status === 'DELIVERY_ON_THE_WAY' && assignment.delivery_status !== null) {
+        await connection.rollback();
         connection.release();
-        return res.status(422).json({ message: 'Must be DELIVERY_ON_THE_WAY before DELIVERED' });
+        return res.status(422).json({ success: false, message: 'Delivery already started' });
+      }
+      if (status === 'DELIVERED' && assignment.delivery_status !== 'DELIVERY_ON_THE_WAY') {
+        await connection.rollback();
+        connection.release();
+        return res.status(422).json({ success: false, message: 'Must be DELIVERY_ON_THE_WAY before DELIVERED' });
       }
       if (status === 'DONE' && assignment.delivery_status !== 'DELIVERED') {
+        await connection.rollback();
         connection.release();
-        return res.status(422).json({ message: 'Must be DELIVERED before DONE' });
+        return res.status(422).json({ success: false, message: 'Must be DELIVERED before DONE' });
       }
 
       await connection.query(
@@ -128,14 +174,26 @@ exports.updateTaskStatus = async (req, res) => {
       if (status === 'DONE') {
         // DONE di courier_assignments → order status menjadi DELIVERED
         orderStatusUpdate = 'DELIVERED';
-        note = 'Menunggu konfirmasi customer untuk COMPLETED';
-      } else {
-        orderStatusUpdate = status === 'DELIVERED' ? null : status;
-        if (status === 'DELIVERY_ON_THE_WAY') orderStatusUpdate = 'DELIVERY_ON_THE_WAY';
+      } else if (status === 'DELIVERY_ON_THE_WAY') {
+        orderStatusUpdate = 'DELIVERY_ON_THE_WAY';
+      }
+      // Note: status 'DELIVERED' di courier assignment TIDAK langsung update order
+      // Hanya DONE yang membuat order → DELIVERED
+
+      // Notifikasi
+      if (order) {
+        if (status === 'DELIVERY_ON_THE_WAY') {
+          await createNotification(connection, order.customer_id, 'Laundry Sedang Diantar',
+            `Kurir sedang mengantar laundry Anda (Order ${assignment.order_id}).`);
+        } else if (status === 'DONE') {
+          await createNotification(connection, order.customer_id, 'Laundry Tiba',
+            `Laundry Anda telah diantar (Order ${assignment.order_id}). Silakan konfirmasi penerimaan.`);
+        }
       }
     } else {
+      await connection.rollback();
       connection.release();
-      return res.status(422).json({ message: `Invalid phase: ${phase}` });
+      return res.status(422).json({ success: false, message: `Invalid phase: ${phase}` });
     }
 
     // Update order status
@@ -159,22 +217,23 @@ exports.updateTaskStatus = async (req, res) => {
       status,
       order_status_updated_to: orderStatusUpdate
     };
-    if (note) responseData.note = note;
 
     res.json({
+      success: true,
       message: 'Task status updated',
       data: responseData
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('updateTaskStatus error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
 // ============================================
 // 5.3. Tugas Aktif Kurir
 // GET /couriers/me/tasks
-// Auth: Bearer Token (role: courier)
+// Auth: Bearer Token (role: courier, verified)
+// FIX: delivery_status IS NULL OR delivery_status != 'DONE'
 // ============================================
 exports.getTasks = async (req, res) => {
   const courier_id = req.user.id;
@@ -188,25 +247,26 @@ exports.getTasks = async (req, res) => {
               END AS task_status,
               o.pickup_address AS customer_address,
               o.pickup_lat AS customer_lat,
-              o.pickup_lng AS customer_lng
+              o.pickup_lng AS customer_lng,
+              o.status AS order_status
        FROM courier_assignments ca
        LEFT JOIN orders o ON ca.order_id = o.order_id
-       WHERE ca.courier_id = ? AND ca.delivery_status != 'DONE'
+       WHERE ca.courier_id = ? AND (ca.delivery_status IS NULL OR ca.delivery_status != 'DONE')
        ORDER BY ca.created_at DESC`,
       [courier_id]
     );
 
-    res.json({ data: tasks });
+    res.json({ success: true, message: 'Success', data: tasks });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('getTasks error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
 // ============================================
 // 5.4. Riwayat Tugas Kurir
 // GET /couriers/me/tasks/history
-// Auth: Bearer Token (role: courier)
+// Auth: Bearer Token (role: courier, verified)
 // ============================================
 exports.getTaskHistory = async (req, res) => {
   const courier_id = req.user.id;
@@ -222,17 +282,43 @@ exports.getTaskHistory = async (req, res) => {
       [courier_id]
     );
 
-    res.json({ data: tasks });
+    res.json({ success: true, message: 'Success', data: tasks });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('getTaskHistory error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ============================================
+// 5.5. Courier Tersedia
+// GET /couriers/available
+// Auth: Bearer Token (role: owner, admin)
+// Menampilkan kurir yang verified dan tidak sedang punya assignment aktif
+// ============================================
+exports.getAvailableCouriers = async (req, res) => {
+  try {
+    const [couriers] = await pool.query(
+      `SELECT u.user_id, u.full_name, u.vehicle_name, u.vehicle_plate_number, u.address
+       FROM users u
+       WHERE u.role = 'courier' AND u.is_verified = 1
+       AND u.user_id NOT IN (
+         SELECT ca.courier_id FROM courier_assignments ca
+         WHERE ca.delivery_status IS NULL OR ca.delivery_status != 'DONE'
+       )
+       ORDER BY u.full_name ASC`
+    );
+
+    res.json({ success: true, message: 'Success', data: couriers });
+  } catch (err) {
+    console.error('getAvailableCouriers error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
 // ============================================
 // 9.3. Laporan Kurir (Earnings)
 // GET /couriers/me/earnings
-// Auth: Bearer Token (role: courier)
+// Auth: Bearer Token (role: courier, verified)
 // ============================================
 exports.getEarnings = async (req, res) => {
   const courier_id = req.user.id;
@@ -284,6 +370,8 @@ exports.getEarnings = async (req, res) => {
     );
 
     res.json({
+      success: true,
+      message: 'Success',
       data: {
         total_deliveries: totalDeliveries,
         total_earned: totalEarned,
@@ -294,7 +382,7 @@ exports.getEarnings = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('getEarnings error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };

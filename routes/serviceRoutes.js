@@ -1,13 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const serviceController = require('../controllers/serviceController');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, requireVerifiedAccount } = require('../middleware/auth');
 
-// Semua endpoint butuh Bearer Token per spec v2
+// Semua endpoint butuh Bearer Token
+// Customer: hanya active services
+// Owner: semua service miliknya (termasuk inactive)
+// Admin: semua service
 router.get('/', authenticate, serviceController.getAllServices);
 router.get('/:service_id', authenticate, serviceController.getServiceById);
-router.post('/', authenticate, authorize('owner'), serviceController.createService);
-router.patch('/:service_id', authenticate, authorize('owner'), serviceController.updateService);
-router.delete('/:service_id', authenticate, authorize('owner'), serviceController.deleteService);
+
+// Owner endpoints — harus verified
+router.post('/', authenticate, authorize('owner'), requireVerifiedAccount, serviceController.createService);
+router.patch('/:service_id', authenticate, authorize('owner'), requireVerifiedAccount, serviceController.updateService);
+router.delete('/:service_id', authenticate, authorize('owner'), requireVerifiedAccount, serviceController.deleteService);
 
 module.exports = router;

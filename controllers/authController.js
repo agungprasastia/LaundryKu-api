@@ -1,11 +1,13 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
+const { isValidEmail, isValidPassword } = require('../helpers/validators');
 
 // ============================================
 // 1.1. Register
 // POST /auth/register
 // Public — tidak perlu token
+// Role admin TIDAK boleh dibuat dari endpoint ini
 // ============================================
 exports.register = async (req, res) => {
   const { full_name, email, password, role, address, lat, lng, vehicle_name, vehicle_plate_number } = req.body;
@@ -13,19 +15,28 @@ exports.register = async (req, res) => {
   // Validasi input
   const errors = {};
   if (!full_name) errors.full_name = ['full_name wajib diisi'];
-  if (!email) errors.email = ['Email wajib diisi'];
-  if (!password) errors.password = ['Password wajib diisi'];
+  if (!email) {
+    errors.email = ['Email wajib diisi'];
+  } else if (!isValidEmail(email)) {
+    errors.email = ['Format email tidak valid'];
+  }
+  if (!password) {
+    errors.password = ['Password wajib diisi'];
+  } else if (!isValidPassword(password)) {
+    errors.password = ['Password minimal 6 karakter'];
+  }
   if (!role) errors.role = ['Role wajib diisi'];
 
   if (Object.keys(errors).length > 0) {
-    return res.status(422).json({ message: 'Validation error', errors });
+    return res.status(422).json({ success: false, message: 'Validation error', errors });
   }
 
-  const validRoles = ['customer', 'owner', 'courier', 'admin'];
+  // Hanya customer, owner, courier yang boleh register dari public endpoint
+  const validRoles = ['customer', 'owner', 'courier'];
   if (!validRoles.includes(role)) {
-    return res.status(422).json({
-      message: 'Validation error',
-      errors: { role: ['Role harus customer, owner, courier, atau admin'] }
+    return res.status(403).json({
+      success: false,
+      message: 'Role admin tidak boleh didaftarkan dari endpoint ini. Hubungi administrator sistem.'
     });
   }
 
@@ -33,18 +44,21 @@ exports.register = async (req, res) => {
     // Cek apakah email sudah terdaftar
     const [existingUsers] = await pool.query('SELECT user_id FROM users WHERE email = ?', [email]);
     if (existingUsers.length > 0) {
-      return res.status(409).json({ message: 'Email already registered' });
+      return res.status(409).json({ success: false, message: 'Email already registered' });
     }
 
     // Hash password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // Customer langsung verified, owner/courier harus diverifikasi admin
+    const isVerified = role === 'customer' ? 1 : 0;
+
     // Simpan user ke database
     const [result] = await pool.query(
-      `INSERT INTO users (full_name, email, password, role, address, lat, lng, vehicle_name, vehicle_plate_number) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [full_name, email, hashedPassword, role, address || null, lat || null, lng || null, vehicle_name || null, vehicle_plate_number || null]
+      `INSERT INTO users (full_name, email, password, role, is_verified, address, lat, lng, vehicle_name, vehicle_plate_number) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [full_name, email, hashedPassword, role, isVerified, address || null, lat || null, lng || null, vehicle_name || null, vehicle_plate_number || null]
     );
 
     const userId = result.insertId;
@@ -59,18 +73,27 @@ exports.register = async (req, res) => {
       [userId, access_token]
     );
 
+    const responseData = {
+      user_id: userId,
+      name: full_name,
+      role,
+      is_verified: isVerified === 1,
+      access_token
+    };
+
+    // Info tambahan untuk owner/courier
+    if (role !== 'customer') {
+      responseData.verification_note = 'Akun Anda belum diverifikasi. Harap tunggu verifikasi dari admin sebelum menggunakan fitur utama.';
+    }
+
     res.status(201).json({
+      success: true,
       message: 'Register success',
-      data: {
-        user_id: userId,
-        name: full_name,
-        role,
-        access_token
-      }
+      data: responseData
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('Register error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
@@ -83,21 +106,25 @@ exports.login = async (req, res) => {
   const { email, password } = req.body;
 
   // Validasi input
-  if (!email || !password) {
-    return res.status(422).json({
-      message: 'Validation error',
-      errors: {
-        ...((!email) && { email: ['Email wajib diisi'] }),
-        ...((!password) && { password: ['Password wajib diisi'] })
-      }
-    });
+  const errors = {};
+  if (!email) {
+    errors.email = ['Email wajib diisi'];
+  } else if (!isValidEmail(email)) {
+    errors.email = ['Format email tidak valid'];
+  }
+  if (!password) {
+    errors.password = ['Password wajib diisi'];
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return res.status(422).json({ success: false, message: 'Validation error', errors });
   }
 
   try {
     // Cek user berdasarkan email
     const [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
     if (users.length === 0) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
     const user = users[0];
@@ -105,7 +132,7 @@ exports.login = async (req, res) => {
     // Bandingkan password
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
     // Buat JWT token
@@ -119,17 +146,19 @@ exports.login = async (req, res) => {
     );
 
     res.json({
+      success: true,
       message: 'Login success',
       data: {
         user_id: user.user_id,
         name: user.full_name,
         role: user.role,
+        is_verified: !!user.is_verified,
         access_token
       }
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('Login error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
@@ -148,19 +177,20 @@ exports.getProfile = async (req, res) => {
     );
 
     if (users.length === 0) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
     const user = users[0];
 
     res.json({
+      success: true,
       message: 'Profile retrieved successfully',
       data: {
         user_id: user.user_id,
         name: user.full_name,
         email: user.email,
         role: user.role,
-        is_verified: user.is_verified,
+        is_verified: !!user.is_verified,
         address: user.address,
         lat: user.lat,
         lng: user.lng,
@@ -170,8 +200,8 @@ exports.getProfile = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('getProfile error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
@@ -197,7 +227,7 @@ exports.editProfile = async (req, res) => {
     if (vehicle_plate_number !== undefined) { updates.push('vehicle_plate_number = ?'); params.push(vehicle_plate_number); }
 
     if (updates.length === 0) {
-      return res.status(422).json({ message: 'Validation error', errors: { body: ['Tidak ada field yang diperbarui'] } });
+      return res.status(422).json({ success: false, message: 'Validation error', errors: { body: ['Tidak ada field yang diperbarui'] } });
     }
 
     params.push(userId);
@@ -207,6 +237,7 @@ exports.editProfile = async (req, res) => {
     const [users] = await pool.query('SELECT user_id, full_name, role FROM users WHERE user_id = ?', [userId]);
 
     res.json({
+      success: true,
       message: 'Profile updated successfully',
       data: {
         user_id: users[0].user_id,
@@ -215,8 +246,8 @@ exports.editProfile = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('editProfile error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
@@ -232,9 +263,9 @@ exports.logout = async (req, res) => {
   try {
     // Hapus session dari database
     await pool.query('DELETE FROM sessions WHERE user_id = ? AND token = ?', [userId, token]);
-    res.json({ message: 'Logout success' });
+    res.json({ success: true, message: 'Logout success' });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('logout error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };

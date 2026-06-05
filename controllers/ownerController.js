@@ -3,11 +3,12 @@ const pool = require('../config/db');
 // ============================================
 // 9.2. Laporan Owner
 // GET /owner/reports/summary
-// Auth: Bearer Token (role: owner)
+// Auth: Bearer Token (role: owner, verified)
+// Menggunakan owner_id dari orders (bukan lagi via order_status_logs)
 // ============================================
 exports.getReportSummary = async (req, res) => {
   const owner_id = req.user.id;
-  const { date_from, date_to, group_by } = req.query;
+  const { date_from, date_to } = req.query;
 
   try {
     let dateFilter = '';
@@ -17,11 +18,9 @@ exports.getReportSummary = async (req, res) => {
       dateParams = [date_from, date_to + ' 23:59:59'];
     }
 
-    // Ambil orders yang dikonfirmasi oleh owner ini
     const baseQuery = `
       FROM orders o
-      JOIN order_status_logs osl ON o.order_id = osl.order_id AND osl.status = 'CONFIRMED' AND osl.changed_by = ?
-      WHERE o.status = 'COMPLETED'${dateFilter}
+      WHERE o.owner_id = ? AND o.status = 'COMPLETED'${dateFilter}
     `;
     const baseParams = [owner_id, ...dateParams];
 
@@ -34,29 +33,79 @@ exports.getReportSummary = async (req, res) => {
       baseParams
     );
 
-    // By service (proper JOIN)
-    const [byServiceFixed] = await pool.query(
+    // By service
+    const [byService] = await pool.query(
       `SELECT s.name AS service, COUNT(*) as orders, COALESCE(SUM(o.owner_earning), 0) as earning
        FROM orders o
-       JOIN order_status_logs osl ON o.order_id = osl.order_id AND osl.status = 'CONFIRMED' AND osl.changed_by = ?
        JOIN services s ON o.service_id = s.service_id
-       WHERE o.status = 'COMPLETED'${dateFilter}
+       WHERE o.owner_id = ? AND o.status = 'COMPLETED'${dateFilter}
        GROUP BY s.name`,
       baseParams
     );
 
     res.json({
+      success: true,
+      message: 'Success',
       data: {
         period: { from: date_from || null, to: date_to || null },
         total_orders: summary[0].total_orders,
         total_revenue_gross: parseFloat(summary[0].total_revenue_gross),
         admin_commission_deducted: parseFloat(summary[0].admin_commission_deducted),
         owner_net_earning: parseFloat(summary[0].owner_net_earning),
-        by_service: byServiceFixed
+        by_service: byService
       }
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('getReportSummary error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ============================================
+// 9.5. Owner: Lihat Orders Milik Owner
+// GET /owner/orders
+// Auth: Bearer Token (role: owner, verified)
+// ============================================
+exports.getOwnerOrders = async (req, res) => {
+  const owner_id = req.user.id;
+  const { status, page = 1, limit = 10 } = req.query;
+  const pageNum = parseInt(page);
+  const limitNum = parseInt(limit);
+  const offset = (pageNum - 1) * limitNum;
+
+  try {
+    let whereConditions = ['o.owner_id = ?'];
+    let params = [owner_id];
+
+    if (status) {
+      whereConditions.push('o.status = ?');
+      params.push(status);
+    }
+
+    const whereClause = 'WHERE ' + whereConditions.join(' AND ');
+
+    const [countResult] = await pool.query(`SELECT COUNT(*) as total FROM orders o ${whereClause}`, params);
+    const total = countResult[0].total;
+
+    const [orders] = await pool.query(
+      `SELECT o.order_id, o.customer_id, o.status, s.name AS service_name, 
+              o.weight_kg, o.total_amount, o.created_at
+       FROM orders o
+       LEFT JOIN services s ON o.service_id = s.service_id
+       ${whereClause}
+       ORDER BY o.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...params, limitNum, offset]
+    );
+
+    res.json({
+      success: true,
+      message: 'Success',
+      data: orders,
+      pagination: { page: pageNum, limit: limitNum, total }
+    });
+  } catch (err) {
+    console.error('getOwnerOrders error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };

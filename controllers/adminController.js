@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { createNotification } = require('../helpers/notification');
 
 // ============================================
 // 7.1. Dashboard Metrics
@@ -34,6 +35,8 @@ exports.getDashboardMetrics = async (req, res) => {
     );
 
     res.json({
+      success: true,
+      message: 'Success',
       data: {
         total_users: totalUsers[0].total,
         total_orders: totalOrders[0].total,
@@ -44,8 +47,8 @@ exports.getDashboardMetrics = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('getDashboardMetrics error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
@@ -53,22 +56,27 @@ exports.getDashboardMetrics = async (req, res) => {
 // 7.2. Verifikasi User
 // PATCH /admin/users/:user_id/verify
 // Auth: Bearer Token (role: admin)
+// Otomatis membuat wallet setelah verify
 // ============================================
 exports.verifyUser = async (req, res) => {
   const { user_id } = req.params;
   const { is_verified } = req.body;
 
+  if (is_verified === undefined || is_verified === null) {
+    return res.status(422).json({ success: false, message: 'is_verified wajib diisi (true/false)' });
+  }
+
   try {
     const [users] = await pool.query('SELECT * FROM users WHERE user_id = ?', [user_id]);
     if (users.length === 0) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
     const user = users[0];
 
     // Hanya owner dan courier yang perlu verifikasi
     if (!['owner', 'courier'].includes(user.role)) {
-      return res.status(422).json({ message: 'Only owner and courier can be verified' });
+      return res.status(422).json({ success: false, message: 'Only owner and courier can be verified' });
     }
 
     const connection = await pool.getConnection();
@@ -95,21 +103,28 @@ exports.verifyUser = async (req, res) => {
       }
     }
 
+    // Notifikasi ke user
+    const verifyStatus = is_verified ? 'diverifikasi' : 'dibatalkan verifikasinya';
+    await createNotification(connection, parseInt(user_id), 'Status Verifikasi',
+      `Akun Anda telah ${verifyStatus} oleh admin.${is_verified && wallet_created ? ' Wallet Anda telah dibuat.' : ''}`);
+
     await connection.commit();
     connection.release();
 
     res.json({
-      message: 'User verified. Wallet created automatically.',
+      success: true,
+      message: is_verified ? 'User verified. Wallet created automatically.' : 'User verification revoked.',
       data: {
         user_id: parseInt(user_id),
+        role: user.role,
         is_verified: is_verified ? true : false,
         wallet_created,
         wallet_id
       }
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('verifyUser error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
@@ -125,7 +140,7 @@ exports.getAdminWallet = async (req, res) => {
     const [wallets] = await pool.query("SELECT * FROM wallets WHERE user_id = ? AND role = 'admin'", [admin_id]);
 
     if (wallets.length === 0) {
-      return res.status(404).json({ message: 'Admin wallet not found' });
+      return res.status(404).json({ success: false, message: 'Admin wallet not found' });
     }
 
     const w = wallets[0];
@@ -140,6 +155,8 @@ exports.getAdminWallet = async (req, res) => {
     );
 
     res.json({
+      success: true,
+      message: 'Success',
       data: {
         wallet_id: w.wallet_id,
         role: 'admin',
@@ -149,8 +166,8 @@ exports.getAdminWallet = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('getAdminWallet error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
@@ -158,24 +175,25 @@ exports.getAdminWallet = async (req, res) => {
 // 7.4. Proses Withdraw
 // PATCH /admin/wallets/withdrawals/:withdraw_id/process
 // Auth: Bearer Token (role: admin)
+// Jika failed, kembalikan saldo (deduct-on-request approach)
 // ============================================
 exports.processWithdraw = async (req, res) => {
   const { withdraw_id } = req.params;
   const { status, note } = req.body;
 
   if (!status || !['success', 'failed'].includes(status)) {
-    return res.status(422).json({ message: 'status harus success atau failed' });
+    return res.status(422).json({ success: false, message: 'status harus success atau failed' });
   }
 
   try {
     const [withdrawals] = await pool.query('SELECT * FROM withdrawals WHERE withdraw_id = ?', [withdraw_id]);
     if (withdrawals.length === 0) {
-      return res.status(404).json({ message: 'Withdrawal not found' });
+      return res.status(404).json({ success: false, message: 'Withdrawal not found' });
     }
 
     const withdrawal = withdrawals[0];
     if (withdrawal.status !== 'pending') {
-      return res.status(422).json({ message: 'Withdrawal already processed' });
+      return res.status(422).json({ success: false, message: 'Withdrawal already processed' });
     }
 
     const connection = await pool.getConnection();
@@ -186,7 +204,7 @@ exports.processWithdraw = async (req, res) => {
       [status, note || null, withdraw_id]
     );
 
-    // Jika failed, kembalikan saldo
+    // Jika failed, kembalikan saldo ke available_balance
     if (status === 'failed') {
       await connection.query(
         'UPDATE wallets SET available_balance = available_balance + ? WHERE wallet_id = ?',
@@ -194,10 +212,19 @@ exports.processWithdraw = async (req, res) => {
       );
     }
 
+    // Notifikasi ke user
+    const [walletInfo] = await connection.query('SELECT user_id FROM wallets WHERE wallet_id = ?', [withdrawal.wallet_id]);
+    if (walletInfo.length > 0) {
+      const statusText = status === 'success' ? 'disetujui' : 'ditolak';
+      await createNotification(connection, walletInfo[0].user_id, 'Withdraw Diproses',
+        `Withdraw ${withdraw_id} telah ${statusText}. ${note ? `Catatan: ${note}` : ''}`);
+    }
+
     await connection.commit();
     connection.release();
 
     res.json({
+      success: true,
       message: 'Withdraw processed',
       data: {
         withdraw_id,
@@ -206,8 +233,81 @@ exports.processWithdraw = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('processWithdraw error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ============================================
+// 7.5. Lihat Users Pending Verification
+// GET /admin/users/pending
+// Auth: Bearer Token (role: admin)
+// ============================================
+exports.getPendingUsers = async (req, res) => {
+  try {
+    const [users] = await pool.query(
+      `SELECT user_id, full_name, email, role, is_verified, address, vehicle_name, vehicle_plate_number, created_at
+       FROM users 
+       WHERE role IN ('owner', 'courier') AND is_verified = 0
+       ORDER BY created_at ASC`
+    );
+
+    res.json({
+      success: true,
+      message: 'Success',
+      data: users
+    });
+  } catch (err) {
+    console.error('getPendingUsers error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ============================================
+// 7.6. Lihat Semua Orders (Admin)
+// GET /admin/orders
+// Auth: Bearer Token (role: admin)
+// ============================================
+exports.getAllOrders = async (req, res) => {
+  const { status, page = 1, limit = 20 } = req.query;
+  const pageNum = parseInt(page);
+  const limitNum = parseInt(limit);
+  const offset = (pageNum - 1) * limitNum;
+
+  try {
+    let whereConditions = [];
+    let params = [];
+
+    if (status) {
+      whereConditions.push('o.status = ?');
+      params.push(status);
+    }
+
+    const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : '';
+
+    const [countResult] = await pool.query(`SELECT COUNT(*) as total FROM orders o ${whereClause}`, params);
+    const total = countResult[0].total;
+
+    const [orders] = await pool.query(
+      `SELECT o.order_id, o.customer_id, o.owner_id, o.status, s.name AS service_name, 
+              o.total_amount, o.weight_kg, o.created_at
+       FROM orders o
+       LEFT JOIN services s ON o.service_id = s.service_id
+       ${whereClause}
+       ORDER BY o.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...params, limitNum, offset]
+    );
+
+    res.json({
+      success: true,
+      message: 'Success',
+      data: orders,
+      pagination: { page: pageNum, limit: limitNum, total }
+    });
+  } catch (err) {
+    console.error('getAllOrders error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
@@ -217,7 +317,7 @@ exports.processWithdraw = async (req, res) => {
 // Auth: Bearer Token (role: admin)
 // ============================================
 exports.getAnalytics = async (req, res) => {
-  const { date_from, date_to, group_by } = req.query;
+  const { date_from, date_to } = req.query;
 
   try {
     let dateFilter = '';
@@ -237,13 +337,13 @@ exports.getAnalytics = async (req, res) => {
     const [activeOwners] = await pool.query("SELECT COUNT(*) as total FROM users WHERE role = 'owner' AND is_verified = 1");
     const [activeCouriers] = await pool.query("SELECT COUNT(*) as total FROM users WHERE role = 'courier' AND is_verified = 1");
 
-    // Top owners
+    // Top owners (by owner_id di orders)
     const [topOwners] = await pool.query(
-      `SELECT osl.changed_by AS owner_id, u.full_name AS name, COUNT(DISTINCT osl.order_id) AS orders
-       FROM order_status_logs osl
-       JOIN users u ON osl.changed_by = u.user_id
-       WHERE osl.status = 'CONFIRMED' AND u.role = 'owner'
-       GROUP BY osl.changed_by, u.full_name
+      `SELECT o.owner_id, u.full_name AS name, COUNT(*) AS orders
+       FROM orders o
+       JOIN users u ON o.owner_id = u.user_id
+       WHERE o.status = 'COMPLETED'
+       GROUP BY o.owner_id, u.full_name
        ORDER BY orders DESC LIMIT 5`
     );
 
@@ -258,6 +358,8 @@ exports.getAnalytics = async (req, res) => {
     );
 
     res.json({
+      success: true,
+      message: 'Success',
       data: {
         total_orders: totalOrders[0].total,
         total_gmv: parseFloat(totalGMV[0].total),
@@ -269,7 +371,7 @@ exports.getAnalytics = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('getAnalytics error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };

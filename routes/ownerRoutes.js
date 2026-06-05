@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const ownerController = require('../controllers/ownerController');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, requireVerifiedAccount } = require('../middleware/auth');
 
-router.get('/reports/summary', authenticate, authorize('owner'), ownerController.getReportSummary);
+router.get('/orders', authenticate, authorize('owner'), requireVerifiedAccount, ownerController.getOwnerOrders);
+router.get('/reports/summary', authenticate, authorize('owner'), requireVerifiedAccount, ownerController.getReportSummary);
 
 module.exports = router;

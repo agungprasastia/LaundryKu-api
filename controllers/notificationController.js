@@ -15,10 +15,10 @@ exports.getNotifications = async (req, res) => {
       [user_id]
     );
 
-    res.json({ data: notifications });
+    res.json({ success: true, message: 'Success', data: notifications });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('getNotifications error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
@@ -38,17 +38,18 @@ exports.markAsRead = async (req, res) => {
     );
 
     if (notifs.length === 0) {
-      return res.status(404).json({ message: 'Notification not found' });
+      return res.status(404).json({ success: false, message: 'Notification not found' });
     }
 
     await pool.query('UPDATE notifications SET is_read = 1 WHERE notification_id = ?', [notification_id]);
 
     res.json({
+      success: true,
       message: 'Notification marked as read',
       data: { notification_id: parseInt(notification_id), is_read: true }
     });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server error' });
+    console.error('markAsRead error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };

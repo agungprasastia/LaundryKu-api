@@ -1,7 +1,7 @@
 -- ============================================
 -- LaundryKu Database Schema
--- Sesuai spesifikasi dokumen A-H (v2)
--- 13 tabel utama
+-- Sesuai spesifikasi dokumen requirement
+-- 13 tabel utama + seed data admin
 -- ============================================
 
 -- Hapus tabel jika sudah ada (urutan penting karena foreign key)
@@ -56,24 +56,29 @@ CREATE TABLE sessions (
 -- 3. Tabel: services
 -- Layanan laundry yang tersedia di platform
 -- Harga customer dihitung otomatis +15% komisi admin
+-- owner_id menunjukkan pemilik service
 -- ============================================
 CREATE TABLE services (
     service_id VARCHAR(20) PRIMARY KEY,
+    owner_id INT NOT NULL,
     name VARCHAR(100) NOT NULL,
     description TEXT NULL,
     price_per_kg_owner DECIMAL(10,2) NOT NULL,
     price_per_kg_customer DECIMAL(10,2) NOT NULL,
     is_active TINYINT(1) DEFAULT 1,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (owner_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
 -- ============================================
 -- 4. Tabel: orders
 -- Mencatat setiap pesanan laundry beserta kalkulasi biaya lengkap
+-- owner_id menunjukkan owner pemilik service/order
 -- ============================================
 CREATE TABLE orders (
     order_id VARCHAR(30) PRIMARY KEY,
     customer_id INT NOT NULL,
+    owner_id INT NOT NULL,
     service_id VARCHAR(20) NOT NULL,
     pickup_address VARCHAR(255) NULL,
     pickup_lat DECIMAL(10,8) NULL,
@@ -103,6 +108,7 @@ CREATE TABLE orders (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (customer_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (owner_id) REFERENCES users(user_id) ON DELETE CASCADE,
     FOREIGN KEY (service_id) REFERENCES services(service_id) ON DELETE CASCADE
 );
 
@@ -265,3 +271,22 @@ CREATE TABLE order_status_logs (
     FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE,
     FOREIGN KEY (changed_by) REFERENCES users(user_id) ON DELETE SET NULL
 );
+
+-- ============================================
+-- SEED DATA: Admin User + Admin Wallet
+--
+-- OPSI 1: Jalankan seed.js (recommended)
+--   node seed.js
+--   Script akan generate hash bcrypt dan insert admin + wallet.
+--
+-- OPSI 2: Insert manual (ganti HASH_PASSWORD dengan hash bcrypt Anda)
+--   INSERT INTO users (full_name, email, password, role, is_verified)
+--   VALUES ('Admin LaundryKu', 'admin@laundryku.com', 'HASH_PASSWORD', 'admin', 1);
+--   INSERT INTO wallets (user_id, role) VALUES (LAST_INSERT_ID(), 'admin');
+--
+-- OPSI 3: Uncomment baris di bawah (password: admin123)
+--   Hash di bawah mungkin perlu digenerate ulang di environment Anda.
+-- ============================================
+-- INSERT INTO users (full_name, email, password, role, is_verified) VALUES
+-- ('Admin LaundryKu', 'admin@laundryku.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'admin', 1);
+-- INSERT INTO wallets (user_id, role) VALUES (LAST_INSERT_ID(), 'admin');
