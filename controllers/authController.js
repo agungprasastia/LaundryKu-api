@@ -253,15 +253,28 @@ exports.editProfile = async (req, res) => {
     await pool.query(`UPDATE users SET ${updates.join(', ')} WHERE user_id = ?`, params);
 
     // Ambil data terbaru
-    const [users] = await pool.query('SELECT user_id, full_name, role FROM users WHERE user_id = ?', [userId]);
+    const [users] = await pool.query(
+      'SELECT user_id, full_name, email, role, is_verified, address, lat, lng, vehicle_name, vehicle_plate_number, created_at FROM users WHERE user_id = ?', 
+      [userId]
+    );
+
+    const user = users[0];
 
     res.json({
       success: true,
       message: 'Profile updated successfully',
       data: {
-        user_id: users[0].user_id,
-        name: users[0].full_name,
-        role: users[0].role
+        user_id: user.user_id,
+        name: user.full_name,
+        email: user.email,
+        role: user.role,
+        is_verified: !!user.is_verified,
+        address: user.address,
+        lat: user.lat,
+        lng: user.lng,
+        vehicle_name: user.vehicle_name,
+        vehicle_plate_number: user.vehicle_plate_number,
+        created_at: user.created_at
       }
     });
   } catch (err) {

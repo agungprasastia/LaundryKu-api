@@ -522,12 +522,18 @@ exports.inputWeight = async (req, res) => {
     const courier_earning = distance_km * 2 * 1250;
     const total_amount = service_fee + delivery_fee;
 
-    // Update order dengan kalkulasi
+    // Update order dengan kalkulasi dan ubah status ke PROCESSING
     await connection.query(
       `UPDATE orders SET weight_kg = ?, distance_km = ?, service_fee = ?, delivery_fee = ?, 
-       admin_commission = ?, owner_earning = ?, courier_earning = ?, total_amount = ?
+       admin_commission = ?, owner_earning = ?, courier_earning = ?, total_amount = ?, status = 'PROCESSING'
        WHERE order_id = ?`,
       [wkg, distance_km, service_fee, delivery_fee, admin_commission, owner_earning, courier_earning, total_amount, order_id]
+    );
+
+    // Catat log status
+    await connection.query(
+      `INSERT INTO order_status_logs (order_id, status, changed_by) VALUES (?, 'PROCESSING', ?)`,
+      [order_id, userId]
     );
 
     // Update invoice

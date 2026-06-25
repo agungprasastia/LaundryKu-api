@@ -220,16 +220,27 @@ exports.getTasks = async (req, res) => {
   try {
     const [tasks] = await pool.query(
       `SELECT ca.assignment_id, ca.order_id, ca.current_phase,
+              ca.pickup_status, ca.delivery_status,
               CASE 
                 WHEN ca.current_phase = 'pickup' THEN ca.pickup_status
                 ELSE ca.delivery_status
-              END AS task_status,
-              o.pickup_address AS customer_address,
-              o.pickup_lat AS customer_lat,
-              o.pickup_lng AS customer_lng,
-              o.status AS order_status
+              END AS status,
+              o.status AS order_status,
+              o.pickup_address,
+              o.pickup_lat,
+              o.pickup_lng,
+              o.delivery_address,
+              o.delivery_lat,
+              o.delivery_lng,
+              ow.lat AS owner_lat,
+              ow.lng AS owner_lng,
+              c.full_name AS customer_name,
+              s.name AS service_name
        FROM courier_assignments ca
        LEFT JOIN orders o ON ca.order_id = o.order_id
+       LEFT JOIN users c ON o.customer_id = c.user_id
+       LEFT JOIN users ow ON o.owner_id = ow.user_id
+       LEFT JOIN services s ON o.service_id = s.service_id
        WHERE ca.courier_id = ? AND (ca.delivery_status IS NULL OR ca.delivery_status != 'DONE')
        ORDER BY ca.created_at DESC`,
       [courier_id]
@@ -253,9 +264,16 @@ exports.getTaskHistory = async (req, res) => {
   try {
     const [tasks] = await pool.query(
       `SELECT ca.assignment_id, ca.order_id, ca.pickup_status, ca.delivery_status,
-              o.courier_earning, ca.updated_at AS completed_at
+              o.courier_earning, ca.updated_at AS completed_at,
+              o.status AS order_status,
+              o.pickup_address,
+              o.delivery_address,
+              c.full_name AS customer_name,
+              s.name AS service_name
        FROM courier_assignments ca
        LEFT JOIN orders o ON ca.order_id = o.order_id
+       LEFT JOIN users c ON o.customer_id = c.user_id
+       LEFT JOIN services s ON o.service_id = s.service_id
        WHERE ca.courier_id = ? AND ca.delivery_status = 'DONE'
        ORDER BY ca.updated_at DESC`,
       [courier_id]
