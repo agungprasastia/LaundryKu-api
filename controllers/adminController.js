@@ -1,5 +1,7 @@
 const pool = require('../config/db');
 const { createNotification } = require('../helpers/notification');
+const { generateId } = require('../helpers/idGenerator');
+const { isPositiveNumber } = require('../helpers/validators');
 
 // ============================================
 // 7.1. Dashboard Metrics
@@ -166,7 +168,10 @@ exports.getAdminWallet = async (req, res) => {
       data: {
         wallet_id: w.wallet_id,
         role: 'admin',
+        balance: parseFloat(w.available_balance) + parseFloat(w.pending_balance),
         available_balance: parseFloat(w.available_balance),
+        pending_balance: parseFloat(w.pending_balance),
+        total_earned: parseFloat(w.total_earned),
         total_commission_earned: parseFloat(w.total_earned),
         this_month: parseFloat(thisMonth[0].total)
       }
@@ -388,6 +393,163 @@ exports.getAnalytics = async (req, res) => {
     });
   } catch (err) {
     console.error('getAnalytics error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ============================================
+// 9.5. Admin Wallet Transactions
+// GET /admin/wallets/me/transactions
+// Auth: Bearer Token (role: admin)
+// ============================================
+exports.getAdminTransactions = async (req, res) => {
+  const admin_id = req.user.id;
+
+  try {
+    const [wallets] = await pool.query(
+      "SELECT wallet_id FROM wallets WHERE user_id = ? AND role = 'admin'",
+      [admin_id]
+    );
+    if (wallets.length === 0) {
+      return res.status(404).json({ success: false, message: 'Admin wallet not found' });
+    }
+
+    const wallet_id = wallets[0].wallet_id;
+    const [transactions] = await pool.query(
+      `SELECT transaction_id, type, amount, status, description, order_id, source, created_at
+       FROM wallet_transactions
+       WHERE wallet_id = ?
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      [wallet_id]
+    );
+
+    res.json({ success: true, message: 'Success', data: transactions });
+  } catch (err) {
+    console.error('getAdminTransactions error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ============================================
+// 9.6. Admin Withdraw
+// POST /admin/wallets/me/withdraw
+// Auth: Bearer Token (role: admin)
+// ============================================
+exports.adminWithdraw = async (req, res) => {
+  const admin_id = req.user.id;
+  const { amount, bank_account_number, bank_name, e_wallet_number, e_wallet_provider } = req.body;
+
+  if (!amount || !isPositiveNumber(amount)) {
+    return res.status(422).json({ success: false, message: 'amount wajib diisi dan > 0' });
+  }
+  if (!bank_account_number && !e_wallet_number) {
+    return res.status(422).json({ success: false, message: 'bank_account_number atau e_wallet_number wajib diisi' });
+  }
+
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    const [wallets] = await connection.query(
+      "SELECT * FROM wallets WHERE user_id = ? AND role = 'admin' FOR UPDATE",
+      [admin_id]
+    );
+    if (wallets.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ success: false, message: 'Admin wallet not found' });
+    }
+
+    const wallet = wallets[0];
+    const withdrawAmount = parseFloat(amount);
+
+    if (withdrawAmount > parseFloat(wallet.available_balance)) {
+      await connection.rollback();
+      return res.status(400).json({ success: false, message: 'Insufficient available balance' });
+    }
+
+    const withdrawId = generateId('WD');
+
+    await connection.query(
+      'UPDATE wallets SET available_balance = available_balance - ? WHERE wallet_id = ?',
+      [withdrawAmount, wallet.wallet_id]
+    );
+
+    await connection.query(
+      `INSERT INTO withdrawals (withdraw_id, wallet_id, amount, bank_account_number, bank_name, e_wallet_number, e_wallet_provider, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      [withdrawId, wallet.wallet_id, withdrawAmount, bank_account_number || null, bank_name || null, e_wallet_number || null, e_wallet_provider || null]
+    );
+
+    await connection.query(
+      `INSERT INTO wallet_transactions (transaction_id, wallet_id, type, amount, status, description, source)
+       VALUES (?, ?, 'debit', ?, 'available', ?, ?)`,
+      [generateId('TXN'), wallet.wallet_id, withdrawAmount, `Withdraw ${withdrawId}`, `withdraw:${withdrawId}`]
+    );
+
+    await connection.commit();
+
+    return res.status(201).json({
+      success: true,
+      message: 'Withdraw request submitted',
+      data: { withdraw_id: withdrawId, amount: withdrawAmount, status: 'pending' }
+    });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error('adminWithdraw error:', err.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+// ============================================
+// 9.7. Pending Withdrawals (semua user)
+// GET /admin/wallets/withdrawals/pending
+// Auth: Bearer Token (role: admin)
+// ============================================
+exports.getPendingWithdrawals = async (req, res) => {
+  try {
+    const [withdrawals] = await pool.query(
+      `SELECT wd.withdraw_id, wd.wallet_id, wd.amount, wd.bank_account_number, wd.bank_name,
+              wd.e_wallet_number, wd.e_wallet_provider, wd.status, wd.note, wd.created_at,
+              u.full_name, u.email
+       FROM withdrawals wd
+       JOIN wallets w ON wd.wallet_id = w.wallet_id
+       JOIN users u ON w.user_id = u.user_id
+       WHERE wd.status = 'pending'
+       ORDER BY wd.created_at ASC`
+    );
+
+    res.json({ success: true, message: 'Success', data: withdrawals });
+  } catch (err) {
+    console.error('getPendingWithdrawals error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ============================================
+// 9.8. Semua Withdrawals (history)
+// GET /admin/wallets/withdrawals
+// Auth: Bearer Token (role: admin)
+// ============================================
+exports.getAllWithdrawals = async (req, res) => {
+  try {
+    const [withdrawals] = await pool.query(
+      `SELECT wd.withdraw_id, wd.wallet_id, wd.amount, wd.bank_account_number, wd.bank_name,
+              wd.e_wallet_number, wd.e_wallet_provider, wd.status, wd.note, wd.processed_at, wd.created_at,
+              u.full_name, u.email
+       FROM withdrawals wd
+       JOIN wallets w ON wd.wallet_id = w.wallet_id
+       JOIN users u ON w.user_id = u.user_id
+       ORDER BY wd.created_at DESC
+       LIMIT 100`
+    );
+
+    res.json({ success: true, message: 'Success', data: withdrawals });
+  } catch (err) {
+    console.error('getAllWithdrawals error:', err.message);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 };
