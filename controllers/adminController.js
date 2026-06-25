@@ -22,7 +22,7 @@ exports.getDashboardMetrics = async (req, res) => {
     const [totalUsers] = await pool.query('SELECT COUNT(*) as total FROM users');
     const [totalOrders] = await pool.query(`SELECT COUNT(*) as total FROM orders WHERE 1=1${dateFilter}`, dateParams);
     const [totalRevenue] = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'success'${dateFilter.replace('created_at', 'paid_at')}`,
+      `SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'success'${dateFilter.replaceAll('created_at', 'paid_at')}`,
       dateParams
     );
     const [totalAdminCommission] = await pool.query(
