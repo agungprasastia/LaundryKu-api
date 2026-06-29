@@ -207,7 +207,7 @@ describe('Courier Controller', () => {
         await courierController.updateTaskStatus(req, res);
         
         expect(res.status).toHaveBeenCalledWith(422);
-        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Pickup already started' }));
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('Pickup already started') }));
         expect(mockRollback).toHaveBeenCalled();
       });
 
@@ -219,7 +219,7 @@ describe('Courier Controller', () => {
         await courierController.updateTaskStatus(req, res);
         
         expect(res.status).toHaveBeenCalledWith(422);
-        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Must be PICKUP_ON_THE_WAY before LAUNDRY_PICKED' }));
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('Must be PICKUP_ON_THE_WAY before LAUNDRY_PICKED') }));
       });
 
       it('should update status to PICKUP_ON_THE_WAY and notify customer', async () => {

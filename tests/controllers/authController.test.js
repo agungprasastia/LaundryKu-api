@@ -277,7 +277,7 @@ describe('Auth Controller', () => {
       await authController.getProfile(req, res);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
         success: true,
-        data: expect.objectContaining({ user_id: 1, name: 'Test' })
+        data: expect.objectContaining({ user_id: 1, full_name: 'Test' })
       }));
     });
 
@@ -335,7 +335,7 @@ describe('Auth Controller', () => {
 
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
         success: true,
-        data: expect.objectContaining({ name: 'New Name' })
+        data: expect.objectContaining({ full_name: 'New Name' })
       }));
     });
 

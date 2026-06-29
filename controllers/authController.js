@@ -84,7 +84,7 @@ exports.register = async (req, res) => {
 
     const responseData = {
       user_id: userId,
-      name: full_name,
+      full_name: full_name,
       role,
       is_verified: isVerified === 1,
       access_token
@@ -159,7 +159,7 @@ exports.login = async (req, res) => {
       message: 'Login success',
       data: {
         user_id: user.user_id,
-        name: user.full_name,
+        full_name: user.full_name,
         role: user.role,
         is_verified: !!user.is_verified,
         access_token
@@ -196,7 +196,7 @@ exports.getProfile = async (req, res) => {
       message: 'Profile retrieved successfully',
       data: {
         user_id: user.user_id,
-        name: user.full_name,
+        full_name: user.full_name,
         email: user.email,
         role: user.role,
         is_verified: !!user.is_verified,
@@ -265,7 +265,7 @@ exports.editProfile = async (req, res) => {
       message: 'Profile updated successfully',
       data: {
         user_id: user.user_id,
-        name: user.full_name,
+        full_name: user.full_name,
         email: user.email,
         role: user.role,
         is_verified: !!user.is_verified,
