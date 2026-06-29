@@ -226,6 +226,7 @@ exports.getTasks = async (req, res) => {
                 ELSE ca.delivery_status
               END AS status,
               o.status AS order_status,
+              o.pickup_scheduled_at,
               o.pickup_address,
               o.pickup_lat,
               o.pickup_lng,
@@ -266,6 +267,7 @@ exports.getTaskHistory = async (req, res) => {
       `SELECT ca.assignment_id, ca.order_id, ca.pickup_status, ca.delivery_status,
               o.courier_earning, ca.updated_at AS completed_at,
               o.status AS order_status,
+              o.pickup_scheduled_at,
               o.pickup_address,
               o.pickup_address AS delivery_address,
               c.full_name AS customer_name,

@@ -136,7 +136,7 @@ exports.getMyOrders = async (req, res) => {
     const total = countResult[0].total;
 
     const [orders] = await pool.query(
-      `SELECT o.order_id, o.status, s.name AS service_name, o.total_amount, o.pickup_address, o.created_at,
+      `SELECT o.order_id, o.status, s.name AS service_name, o.total_amount, o.pickup_address, o.created_at, o.pickup_scheduled_at,
               i.invoice_id
        FROM orders o
        LEFT JOIN services s ON o.service_id = s.service_id

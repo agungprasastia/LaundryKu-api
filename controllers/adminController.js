@@ -311,7 +311,7 @@ exports.getAllOrders = async (req, res) => {
 
     const [orders] = await pool.query(
       `SELECT o.order_id, o.customer_id, o.owner_id, o.status, s.name AS service_name, 
-              o.total_amount, o.weight_kg, o.created_at
+              o.total_amount, o.weight_kg, o.created_at, o.pickup_scheduled_at
        FROM orders o
        LEFT JOIN services s ON o.service_id = s.service_id
        ${whereClause}
