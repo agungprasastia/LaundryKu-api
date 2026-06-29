@@ -229,9 +229,9 @@ exports.getTasks = async (req, res) => {
               o.pickup_address,
               o.pickup_lat,
               o.pickup_lng,
-              o.delivery_address,
-              o.delivery_lat,
-              o.delivery_lng,
+              o.pickup_address AS delivery_address,
+              o.pickup_lat AS delivery_lat,
+              o.pickup_lng AS delivery_lng,
               ow.lat AS owner_lat,
               ow.lng AS owner_lng,
               c.full_name AS customer_name,
@@ -267,7 +267,7 @@ exports.getTaskHistory = async (req, res) => {
               o.courier_earning, ca.updated_at AS completed_at,
               o.status AS order_status,
               o.pickup_address,
-              o.delivery_address,
+              o.pickup_address AS delivery_address,
               c.full_name AS customer_name,
               s.name AS service_name
        FROM courier_assignments ca
