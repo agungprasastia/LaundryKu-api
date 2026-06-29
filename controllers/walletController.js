@@ -42,8 +42,8 @@ exports.getBalance = async (req, res) => {
 exports.getTransactions = async (req, res) => {
   const user_id = req.user.id;
   const { page = 1, limit = 10, type, status } = req.query;
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const limitNum = Math.max(1, parseInt(limit) || 10);
   const offset = (pageNum - 1) * limitNum;
 
   try {
@@ -186,8 +186,8 @@ exports.withdraw = async (req, res) => {
 exports.getWithdrawals = async (req, res) => {
   const user_id = req.user.id;
   const { status, page = 1, limit = 10 } = req.query;
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const limitNum = Math.max(1, parseInt(limit) || 10);
   const offset = (pageNum - 1) * limitNum;
 
   try {

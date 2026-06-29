@@ -117,8 +117,8 @@ exports.createOrder = async (req, res) => {
 exports.getMyOrders = async (req, res) => {
   const customer_id = req.user.id;
   const { status, page = 1, limit = 10 } = req.query;
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const limitNum = Math.max(1, parseInt(limit) || 10);
   const offset = (pageNum - 1) * limitNum;
 
   try {
@@ -818,8 +818,8 @@ exports.completeOrder = async (req, res) => {
 exports.getOrderHistory = async (req, res) => {
   const customer_id = req.user.id;
   const { status, date_from, date_to, page = 1, limit = 20 } = req.query;
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const limitNum = Math.max(1, parseInt(limit) || 10);
   const offset = (pageNum - 1) * limitNum;
 
   try {

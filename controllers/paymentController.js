@@ -14,7 +14,7 @@ const STATUS_ORDER = [
 // Hanya diinisialisasi jika USE_DUMMY_PAYMENT bukan 'true'
 // ============================================
 let snap = null;
-const useDummyPayment = process.env.USE_DUMMY_PAYMENT === 'true';
+const useDummyPayment = process.env.USE_DUMMY_PAYMENT === 'true' && process.env.NODE_ENV !== 'production';
 
 if (!useDummyPayment) {
   try {
