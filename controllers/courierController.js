@@ -98,17 +98,17 @@ exports.updateTaskStatus = async (req, res) => {
           await connection.rollback();
           return res.status(422).json({ 
             success: false,
-            message: `Invalid status for pickup phase. Valid: ${validPickup.join(', ')}` 
+            message: `Invalid status for pickup phase. Valid: ${validPickup.join(', ')}. Received: ${status}` 
           });
         }
 
-        if (status === 'PICKUP_ON_THE_WAY' && assignment.pickup_status !== null) {
+        if (status === 'PICKUP_ON_THE_WAY' && assignment.pickup_status) {
           await connection.rollback();
-          return res.status(422).json({ success: false, message: 'Pickup already started' });
+          return res.status(422).json({ success: false, message: `Pickup already started. Current status: ${assignment.pickup_status}` });
         }
         if (status === 'LAUNDRY_PICKED' && assignment.pickup_status !== 'PICKUP_ON_THE_WAY') {
           await connection.rollback();
-          return res.status(422).json({ success: false, message: 'Must be PICKUP_ON_THE_WAY before LAUNDRY_PICKED' });
+          return res.status(422).json({ success: false, message: `Must be PICKUP_ON_THE_WAY before LAUNDRY_PICKED. Current: ${assignment.pickup_status}` });
         }
 
         await connection.query(
@@ -137,21 +137,21 @@ exports.updateTaskStatus = async (req, res) => {
           await connection.rollback();
           return res.status(422).json({ 
             success: false,
-            message: `Invalid status for delivery phase. Valid: ${validDelivery.join(', ')}` 
+            message: `Invalid status for delivery phase. Valid: ${validDelivery.join(', ')}. Received: ${status}` 
           });
         }
 
-        if (status === 'DELIVERY_ON_THE_WAY' && assignment.delivery_status !== null) {
+        if (status === 'DELIVERY_ON_THE_WAY' && assignment.delivery_status) {
           await connection.rollback();
-          return res.status(422).json({ success: false, message: 'Delivery already started' });
+          return res.status(422).json({ success: false, message: `Delivery already started. Current: ${assignment.delivery_status}` });
         }
         if (status === 'DELIVERED' && assignment.delivery_status !== 'DELIVERY_ON_THE_WAY') {
           await connection.rollback();
-          return res.status(422).json({ success: false, message: 'Must be DELIVERY_ON_THE_WAY before DELIVERED' });
+          return res.status(422).json({ success: false, message: `Must be DELIVERY_ON_THE_WAY before DELIVERED. Current: ${assignment.delivery_status}` });
         }
         if (status === 'DONE' && assignment.delivery_status !== 'DELIVERED') {
           await connection.rollback();
-          return res.status(422).json({ success: false, message: 'Must be DELIVERED before DONE' });
+          return res.status(422).json({ success: false, message: `Must be DELIVERED before DONE. Current: ${assignment.delivery_status}` });
         }
 
         await connection.query(
