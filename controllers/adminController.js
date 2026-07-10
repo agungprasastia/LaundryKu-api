@@ -19,6 +19,8 @@ exports.getDashboardMetrics = async (req, res) => {
       dateParams = [date_from, date_to + ' 23:59:59'];
     }
 
+    // User counts — master data, tidak di-filter by date (users exist regardless of date range)
+    // Order/revenue/commission counts — di-filter by date jika date_from & date_to dikirim
     const [totalUsers] = await pool.query('SELECT COUNT(*) as total FROM users');
     const [totalOrders] = await pool.query(`SELECT COUNT(*) as total FROM orders WHERE 1=1${dateFilter}`, dateParams);
     const [totalRevenue] = await pool.query(
@@ -76,6 +78,9 @@ exports.verifyUser = async (req, res) => {
     return res.status(422).json({ success: false, message: 'is_verified wajib diisi (true/false)' });
   }
 
+  // FIX: Strict boolean — "false" (string) tidak boleh dianggap true
+  const verified = is_verified === true || is_verified === 1;
+
   try {
     const [users] = await pool.query('SELECT * FROM users WHERE user_id = ?', [user_id]);
     if (users.length === 0) {
@@ -93,13 +98,13 @@ exports.verifyUser = async (req, res) => {
     try {
       await connection.beginTransaction();
 
-      await connection.query('UPDATE users SET is_verified = ? WHERE user_id = ?', [is_verified ? 1 : 0, user_id]);
+      await connection.query('UPDATE users SET is_verified = ? WHERE user_id = ?', [verified ? 1 : 0, user_id]);
 
       let wallet_created = false;
       let wallet_id = null;
 
       // Jika verified → buat wallet otomatis
-      if (is_verified) {
+      if (verified) {
         const [existingWallet] = await connection.query('SELECT wallet_id FROM wallets WHERE user_id = ?', [user_id]);
         if (existingWallet.length === 0) {
           const [walletResult] = await connection.query(
@@ -114,19 +119,19 @@ exports.verifyUser = async (req, res) => {
       }
 
       // Notifikasi ke user
-      const verifyStatus = is_verified ? 'diverifikasi' : 'dibatalkan verifikasinya';
+      const verifyStatus = verified ? 'diverifikasi' : 'dibatalkan verifikasinya';
       await createNotification(connection, parseInt(user_id), 'Status Verifikasi',
-        `Akun Anda telah ${verifyStatus} oleh admin.${is_verified && wallet_created ? ' Wallet Anda telah dibuat.' : ''}`);
+        `Akun Anda telah ${verifyStatus} oleh admin.${verified && wallet_created ? ' Wallet Anda telah dibuat.' : ''}`);
 
       await connection.commit();
 
       res.json({
         success: true,
-        message: is_verified ? 'User verified. Wallet created automatically.' : 'User verification revoked.',
+        message: verified ? 'User verified. Wallet created automatically.' : 'User verification revoked.',
         data: {
           user_id: parseInt(user_id),
           role: user.role,
-          is_verified: is_verified ? true : false,
+          is_verified: verified,
           wallet_created,
           wallet_id
         }

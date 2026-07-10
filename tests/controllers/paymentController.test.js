@@ -48,6 +48,7 @@ describe('Payment Controller', () => {
 
   const loadController = (dummyPayment, midtransKey) => {
     jest.isolateModules(() => {
+      process.env.NODE_ENV = dummyPayment ? 'development' : 'test';
       process.env.USE_DUMMY_PAYMENT = dummyPayment ? 'true' : 'false';
       if (midtransKey !== undefined) {
         process.env.MIDTRANS_SERVER_KEY = midtransKey;

@@ -49,14 +49,16 @@ exports.createOrder = async (req, res) => {
 
   const connection = await pool.getConnection();
   try {
+    await connection.beginTransaction();
+
     // 1. Cek service exists dan active
     const [services] = await connection.query('SELECT * FROM services WHERE service_id = ? AND is_active = 1', [service_id]);
     if (services.length === 0) {
+      await connection.rollback();
       return res.status(404).json({ success: false, message: 'Service not found or inactive' });
     }
 
     const service = services[0];
-    await connection.beginTransaction();
 
     // 2. Generate IDs (dengan random suffix)
     const orderId = generateId('ORD');

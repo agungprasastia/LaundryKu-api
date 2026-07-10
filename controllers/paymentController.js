@@ -14,7 +14,8 @@ const STATUS_ORDER = [
 // Hanya diinisialisasi jika USE_DUMMY_PAYMENT bukan 'true'
 // ============================================
 let snap = null;
-const useDummyPayment = process.env.USE_DUMMY_PAYMENT === 'true' && process.env.NODE_ENV !== 'production';
+// FIX: Require NODE_ENV === 'development' explicitly — prevents accidental dummy mode in production
+const useDummyPayment = process.env.USE_DUMMY_PAYMENT === 'true' && process.env.NODE_ENV === 'development';
 
 if (!useDummyPayment) {
   try {
@@ -114,13 +115,17 @@ exports.createPayment = async (req, res) => {
     return res.status(422).json({ success: false, message: 'Validation error', errors });
   }
 
+  const connection = await pool.getConnection();
   try {
-    // Cek invoice exists
-    const [invoices] = await pool.query(
-      `SELECT i.*, o.customer_id, o.order_id FROM invoices i JOIN orders o ON i.order_id = o.order_id WHERE i.invoice_id = ?`,
+    await connection.beginTransaction();
+
+    // FIX: SELECT ... FOR UPDATE — lock invoice row untuk cegah race condition double payment
+    const [invoices] = await connection.query(
+      `SELECT i.*, o.customer_id, o.order_id FROM invoices i JOIN orders o ON i.order_id = o.order_id WHERE i.invoice_id = ? FOR UPDATE`,
       [invoice_id]
     );
     if (invoices.length === 0) {
+      await connection.rollback();
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
 
@@ -128,23 +133,27 @@ exports.createPayment = async (req, res) => {
 
     // Cek invoice milik customer yang login
     if (invoice.customer_id !== user_id) {
+      await connection.rollback();
       return res.status(403).json({ success: false, message: 'Forbidden: not your invoice' });
     }
 
     if (invoice.status === 'paid') {
+      await connection.rollback();
       return res.status(400).json({ success: false, message: 'Invoice already paid' });
     }
 
     if (!invoice.amount || invoice.amount <= 0) {
+      await connection.rollback();
       return res.status(400).json({ success: false, message: 'Invoice amount not yet calculated. Owner must input weight first.' });
     }
 
-    // FIX: Cek existing pending payment untuk invoice yang sama
-    const [existingPending] = await pool.query(
-      "SELECT payment_id, va_number FROM payments WHERE invoice_id = ? AND status = 'pending'",
+    // FIX: Cek existing pending payment dengan lock — concurrent requests serialize disini
+    const [existingPending] = await connection.query(
+      "SELECT payment_id, va_number FROM payments WHERE invoice_id = ? AND status IN ('pending', 'success') FOR UPDATE",
       [invoice_id]
     );
     if (existingPending.length > 0) {
+      await connection.rollback();
       return res.status(409).json({
         success: false,
         message: 'Payment already created for this invoice. Use the existing payment.',
@@ -157,7 +166,7 @@ exports.createPayment = async (req, res) => {
     }
 
     // Ambil data customer
-    const [customers] = await pool.query('SELECT full_name, email FROM users WHERE user_id = ?', [user_id]);
+    const [customers] = await connection.query('SELECT full_name, email FROM users WHERE user_id = ?', [user_id]);
     const customer = customers[0];
 
     const paymentId = generateId('PAY');
@@ -168,11 +177,13 @@ exports.createPayment = async (req, res) => {
       const dummyToken = `dummy_snap_${paymentId}`;
       const dummyUrl = `http://localhost:${process.env.PORT || 3000}/payments/callback?info=dummy`;
 
-      await pool.query(
-        `INSERT INTO payments (payment_id, invoice_id, user_id, payment_method, amount, status, va_number) 
+      await connection.query(
+        `INSERT INTO payments (payment_id, invoice_id, user_id, payment_method, amount, status, va_number)
          VALUES (?, ?, ?, 'dummy', ?, 'pending', ?)`,
         [paymentId, invoice_id, user_id, grossAmount, dummyToken]
       );
+
+      await connection.commit();
 
       return res.status(201).json({
         success: true,
@@ -192,6 +203,7 @@ exports.createPayment = async (req, res) => {
 
     // ========== MIDTRANS MODE ==========
     if (!snap) {
+      await connection.rollback();
       return res.status(503).json({
         success: false,
         message: 'Midtrans client not available. Install midtrans-client atau set USE_DUMMY_PAYMENT=true di .env.'
@@ -201,6 +213,7 @@ exports.createPayment = async (req, res) => {
     // Validasi server key — jangan proses dengan key kosong/default
     const serverKey = process.env.MIDTRANS_SERVER_KEY || '';
     if (!serverKey || serverKey === 'SB-Mid-server-xxxxxxxxxxxxxxxxxxxxxxxx') {
+      await connection.rollback();
       return res.status(503).json({
         success: false,
         message: 'MIDTRANS_SERVER_KEY belum dikonfigurasi. Set key yang valid di .env atau gunakan USE_DUMMY_PAYMENT=true.'
@@ -244,6 +257,7 @@ exports.createPayment = async (req, res) => {
       if (snapErr.ApiResponse) {
         console.error('Midtrans API Response:', JSON.stringify(snapErr.ApiResponse));
       }
+      await connection.rollback();
       return res.status(502).json({
         success: false,
         message: 'Payment gateway error. Coba lagi nanti.',
@@ -252,11 +266,13 @@ exports.createPayment = async (req, res) => {
     }
 
     // Snap sukses — sekarang baru simpan payment record dengan snap token
-    await pool.query(
-      `INSERT INTO payments (payment_id, invoice_id, user_id, payment_method, amount, status, va_number) 
+    await connection.query(
+      `INSERT INTO payments (payment_id, invoice_id, user_id, payment_method, amount, status, va_number)
        VALUES (?, ?, ?, 'midtrans_snap', ?, 'pending', ?)`,
       [paymentId, invoice_id, user_id, grossAmount, midtransResponse.token]
     );
+
+    await connection.commit();
 
     res.status(201).json({
       success: true,
@@ -272,8 +288,11 @@ exports.createPayment = async (req, res) => {
       }
     });
   } catch (err) {
+    if (connection) await connection.rollback();
     console.error('createPayment error:', err.message);
     res.status(500).json({ success: false, message: 'Server error' });
+  } finally {
+    if (connection) connection.release();
   }
 };
 
