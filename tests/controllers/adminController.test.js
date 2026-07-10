@@ -70,7 +70,11 @@ describe('Admin Controller', () => {
         .mockResolvedValueOnce([[{ total: 500 }]])
         .mockResolvedValueOnce([[{ total: 50 }]])
         .mockResolvedValueOnce([[{ total: 15 }]])
-        .mockResolvedValueOnce([[{ total: 5 }]]);
+        .mockResolvedValueOnce([[{ total: 5 }]])
+        .mockResolvedValueOnce([[{ total: 7 }]])
+        .mockResolvedValueOnce([[{ total: 100 }]])
+        .mockResolvedValueOnce([[{ total: 21 }]])
+        .mockResolvedValueOnce([[{ total: 78 }]]);
 
       await adminController.getDashboardMetrics(req, res);
 
@@ -82,7 +86,11 @@ describe('Admin Controller', () => {
           total_revenue: 500,
           total_admin_commission: 50,
           orders_completed: 15,
-          orders_pending: 5
+          orders_pending: 5,
+          active_couriers: 7,
+          total_customers: 100,
+          total_couriers: 21,
+          total_owners: 78
         })
       }));
     });

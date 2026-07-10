@@ -35,6 +35,10 @@ exports.getDashboardMetrics = async (req, res) => {
     const [ordersPending] = await pool.query(
       `SELECT COUNT(*) as total FROM orders WHERE status NOT IN ('COMPLETED', 'DELIVERED')${dateFilter}`, dateParams
     );
+    const [activeCouriers] = await pool.query("SELECT COUNT(*) as total FROM users WHERE role = 'courier' AND is_verified = 1");
+    const [totalCustomers] = await pool.query("SELECT COUNT(*) as total FROM users WHERE role = 'customer'");
+    const [totalCouriers] = await pool.query("SELECT COUNT(*) as total FROM users WHERE role = 'courier'");
+    const [totalOwners] = await pool.query("SELECT COUNT(*) as total FROM users WHERE role = 'owner'");
 
     res.json({
       success: true,
@@ -45,7 +49,11 @@ exports.getDashboardMetrics = async (req, res) => {
         total_revenue: parseFloat(totalRevenue[0].total),
         total_admin_commission: parseFloat(totalAdminCommission[0].total),
         orders_completed: ordersCompleted[0].total,
-        orders_pending: ordersPending[0].total
+        orders_pending: ordersPending[0].total,
+        active_couriers: activeCouriers[0].total,
+        total_customers: totalCustomers[0].total,
+        total_couriers: totalCouriers[0].total,
+        total_owners: totalOwners[0].total
       }
     });
   } catch (err) {
