@@ -743,6 +743,13 @@ exports.completeOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Order must be DELIVERED before completing' });
     }
 
+    // Cek status invoice pembayaran
+    const [invoices] = await connection.query('SELECT status FROM invoices WHERE order_id = ?', [order_id]);
+    if (invoices.length > 0 && invoices[0].status !== 'paid') {
+      await connection.rollback();
+      return res.status(400).json({ success: false, message: 'Invoice harus dibayar terlebih dahulu sebelum menyelesaikan pesanan' });
+    }
+
     // 1. Update order status → COMPLETED
     await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', ['COMPLETED', order_id]);
 
