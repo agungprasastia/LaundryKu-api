@@ -14,8 +14,8 @@ const STATUS_ORDER = [
 // Hanya diinisialisasi jika USE_DUMMY_PAYMENT bukan 'true'
 // ============================================
 let snap = null;
-// FIX: Require NODE_ENV === 'development' explicitly — prevents accidental dummy mode in production
-const useDummyPayment = process.env.USE_DUMMY_PAYMENT === 'true' && process.env.NODE_ENV === 'development';
+// Set USE_DUMMY_PAYMENT=true di environment untuk mengaktifkan dummy mode
+const useDummyPayment = process.env.USE_DUMMY_PAYMENT === 'true';
 
 if (!useDummyPayment) {
   try {
