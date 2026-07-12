@@ -771,7 +771,7 @@ exports.completeOrder = async (req, res) => {
     const releasedTo = {};
     for (const txn of pendingTxns) {
       await connection.query(
-        `UPDATE wallets SET available_balance = available_balance + ?, pending_balance = pending_balance - ? WHERE wallet_id = ?`,
+        `UPDATE wallets SET available_balance = available_balance + ?, pending_balance = GREATEST(0, pending_balance - ?) WHERE wallet_id = ?`,
         [txn.amount, txn.amount, txn.wallet_id]
       );
       await connection.query(
