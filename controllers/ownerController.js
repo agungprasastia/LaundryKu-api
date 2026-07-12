@@ -88,10 +88,11 @@ exports.getOwnerOrders = async (req, res) => {
     const total = countResult[0].total;
 
     const [orders] = await pool.query(
-      `SELECT o.order_id, o.customer_id, o.status, s.name AS service_name, 
+      `SELECT o.order_id, o.customer_id, u.full_name AS customer_name, o.status, s.name AS service_name, 
               o.weight_kg, o.total_amount, o.created_at, o.pickup_scheduled_at, o.pickup_address
        FROM orders o
        LEFT JOIN services s ON o.service_id = s.service_id
+       LEFT JOIN users u ON o.customer_id = u.user_id
        ${whereClause}
        ORDER BY o.created_at DESC
        LIMIT ? OFFSET ?`,
