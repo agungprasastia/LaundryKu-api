@@ -1,4 +1,4 @@
-const pool = require('../config/db');
+  const pool = require('../config/db');
 const { createNotification } = require('../helpers/notification');
 const { generateId } = require('../helpers/idGenerator');
 const { isPositiveNumber } = require('../helpers/validators');
@@ -534,7 +534,7 @@ exports.getPendingWithdrawals = async (req, res) => {
        JOIN wallets w ON wd.wallet_id = w.wallet_id
        JOIN users u ON w.user_id = u.user_id
        WHERE wd.status = 'pending'
-       ORDER BY wd.created_at DESC`
+       ORDER BY wd.created_at ASC`
     );
 
     res.json({ success: true, message: 'Success', data: withdrawals });
