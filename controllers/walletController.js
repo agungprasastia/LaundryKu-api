@@ -130,10 +130,10 @@ exports.withdraw = async (req, res) => {
 
     const withdrawId = generateId('WD');
 
-    // Kurangi available_balance saat request (deduct-on-request approach)
+    // Kurangi available_balance dan pindahkan ke pending_balance saat request (deduct-on-request approach)
     await connection.query(
-      'UPDATE wallets SET available_balance = available_balance - ? WHERE wallet_id = ?',
-      [withdrawAmount, wallet.wallet_id]
+      'UPDATE wallets SET available_balance = available_balance - ?, pending_balance = pending_balance + ? WHERE wallet_id = ?',
+      [withdrawAmount, withdrawAmount, wallet.wallet_id]
     );
 
     // Buat record withdrawal

@@ -247,8 +247,8 @@ describe('walletController', () => {
 
       expect(mockConnection.beginTransaction).toHaveBeenCalled();
       expect(mysql.mockQuery).toHaveBeenCalledWith(
-        'UPDATE wallets SET available_balance = available_balance - ? WHERE wallet_id = ?',
-        [100, 'W1']
+        'UPDATE wallets SET available_balance = available_balance - ?, pending_balance = pending_balance + ? WHERE wallet_id = ?',
+        [100, 100, 'W1']
       );
       expect(mysql.mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO withdrawals'),
