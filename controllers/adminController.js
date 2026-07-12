@@ -368,6 +368,7 @@ exports.getAnalytics = async (req, res) => {
     const [totalAdminCommission] = await pool.query(
       `SELECT COALESCE(SUM(admin_commission), 0) as total FROM orders o WHERE status = 'COMPLETED'${dateFilter}`, dateParams
     );
+    const [totalUsers] = await pool.query("SELECT COUNT(*) as total FROM users WHERE role != 'admin'");
     const [activeOwners] = await pool.query("SELECT COUNT(*) as total FROM users WHERE role = 'owner' AND is_verified = 1");
     const [activeCouriers] = await pool.query("SELECT COUNT(*) as total FROM users WHERE role = 'courier' AND is_verified = 1");
 
@@ -398,6 +399,7 @@ exports.getAnalytics = async (req, res) => {
         total_orders: totalOrders[0].total,
         total_gmv: parseFloat(totalGMV[0].total),
         total_admin_commission: parseFloat(totalAdminCommission[0].total),
+        total_users: totalUsers[0].total,
         active_owners: activeOwners[0].total,
         active_couriers: activeCouriers[0].total,
         top_owners: topOwners,
