@@ -534,7 +534,7 @@ exports.getPendingWithdrawals = async (req, res) => {
        JOIN wallets w ON wd.wallet_id = w.wallet_id
        JOIN users u ON w.user_id = u.user_id
        WHERE wd.status = 'pending'
-       ORDER BY wd.created_at ASC`
+       ORDER BY wd.created_at DESC`
     );
 
     res.json({ success: true, message: 'Success', data: withdrawals });
