@@ -497,8 +497,8 @@ exports.adminWithdraw = async (req, res) => {
     );
 
     await connection.query(
-      `INSERT INTO withdrawals (withdraw_id, wallet_id, amount, bank_account_number, bank_name, e_wallet_number, e_wallet_provider, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      `INSERT INTO withdrawals (withdraw_id, wallet_id, amount, bank_account_number, bank_name, e_wallet_number, e_wallet_provider, status, processed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'success', NOW())`,
       [withdrawId, wallet.wallet_id, withdrawAmount, bank_account_number || null, bank_name || null, e_wallet_number || null, e_wallet_provider || null]
     );
 
@@ -513,7 +513,7 @@ exports.adminWithdraw = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'Withdraw request submitted',
-      data: { withdraw_id: withdrawId, amount: withdrawAmount, status: 'pending' }
+      data: { withdraw_id: withdrawId, amount: withdrawAmount, status: 'success' }
     });
   } catch (err) {
     if (connection) await connection.rollback();
