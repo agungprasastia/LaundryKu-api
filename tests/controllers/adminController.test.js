@@ -265,8 +265,9 @@ describe('Admin Controller', () => {
       req.params = { withdraw_id: 'WD1' };
       req.body = { status: 'success' };
       pool.query
-        .mockResolvedValueOnce([[{ status: 'pending', wallet_id: 1 }]]) // SELECT
-        .mockResolvedValueOnce([]) // UPDATE
+        .mockResolvedValueOnce([[{ status: 'pending', wallet_id: 1, amount: 100 }]]) // SELECT
+        .mockResolvedValueOnce([]) // UPDATE withdrawals
+        .mockResolvedValueOnce([]) // UPDATE wallets (new!)
         .mockResolvedValueOnce([[{ user_id: 2 }]]); // SELECT wallet user_id
 
       await adminController.processWithdraw(req, res);
@@ -292,8 +293,9 @@ describe('Admin Controller', () => {
       req.params = { withdraw_id: 'WD1' };
       req.body = { status: 'success' };
       pool.query
-        .mockResolvedValueOnce([[{ status: 'pending', wallet_id: 1 }]]) // SELECT
-        .mockResolvedValueOnce([]) // UPDATE
+        .mockResolvedValueOnce([[{ status: 'pending', wallet_id: 1, amount: 100 }]]) // SELECT
+        .mockResolvedValueOnce([]) // UPDATE withdrawals
+        .mockResolvedValueOnce([]) // UPDATE wallets (new!)
         .mockResolvedValueOnce([[]]); // SELECT wallet user_id returns empty
 
       await adminController.processWithdraw(req, res);
