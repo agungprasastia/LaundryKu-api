@@ -239,12 +239,12 @@ exports.processWithdraw = async (req, res) => {
     // Update wallet balance (selalu kurangi pending_balance, kembalikan ke available_balance hanya jika failed)
     if (status === 'failed') {
       await connection.query(
-        'UPDATE wallets SET available_balance = available_balance + ?, pending_balance = pending_balance - ? WHERE wallet_id = ?',
+        'UPDATE wallets SET available_balance = available_balance + ?, pending_balance = GREATEST(0, pending_balance - ?) WHERE wallet_id = ?',
         [withdrawal.amount, withdrawal.amount, withdrawal.wallet_id]
       );
     } else if (status === 'success') {
       await connection.query(
-        'UPDATE wallets SET pending_balance = pending_balance - ? WHERE wallet_id = ?',
+        'UPDATE wallets SET pending_balance = GREATEST(0, pending_balance - ?) WHERE wallet_id = ?',
         [withdrawal.amount, withdrawal.wallet_id]
       );
     }
