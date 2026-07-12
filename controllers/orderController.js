@@ -851,7 +851,7 @@ exports.getOrderHistory = async (req, res) => {
     const [orders] = await pool.query(
       `SELECT o.order_id, s.name AS service_name, o.weight_kg, o.total_amount, o.status,
               i.invoice_id, p.payment_method, u.full_name AS courier_name,
-              o.created_at, o.updated_at AS completed_at
+              o.created_at, o.pickup_scheduled_at, o.pickup_address, o.updated_at AS completed_at
        FROM orders o
        LEFT JOIN services s ON o.service_id = s.service_id
        LEFT JOIN invoices i ON o.order_id = i.order_id
