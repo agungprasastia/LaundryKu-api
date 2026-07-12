@@ -364,12 +364,48 @@ exports.getEarnings = async (req, res) => {
       params
     );
 
+    // Hitung pendapatan hari ini
+    const [todayResult] = await pool.query(
+      `SELECT COALESCE(SUM(o.courier_earning), 0) AS earned
+       FROM courier_assignments ca
+       LEFT JOIN orders o ON ca.order_id = o.order_id
+       WHERE ca.courier_id = ? AND ca.delivery_status = 'DONE' AND DATE(ca.updated_at) = CURDATE()`,
+      [courier_id]
+    );
+    const todayEarned = parseFloat(todayResult[0].earned);
+
+    // Hitung pendapatan bulan ini
+    const [monthResult] = await pool.query(
+      `SELECT COALESCE(SUM(o.courier_earning), 0) AS earned
+       FROM courier_assignments ca
+       LEFT JOIN orders o ON ca.order_id = o.order_id
+       WHERE ca.courier_id = ? AND ca.delivery_status = 'DONE' AND MONTH(ca.updated_at) = MONTH(CURDATE()) AND YEAR(ca.updated_at) = YEAR(CURDATE())`,
+      [courier_id]
+    );
+    const monthEarned = parseFloat(monthResult[0].earned);
+
+    // Dapatkan list tugas selesai individual untuk riwayat
+    const [tasksList] = await pool.query(
+      `SELECT ca.assignment_id, ca.order_id, o.courier_earning AS amount, ca.updated_at
+       FROM courier_assignments ca
+       LEFT JOIN orders o ON ca.order_id = o.order_id
+       ${whereClause}
+       ORDER BY ca.updated_at DESC`,
+      params
+    );
+
     res.json({
       success: true,
       message: 'Success',
       data: {
         total_deliveries: totalDeliveries,
         total_earned: totalEarned,
+        total_earnings: totalEarned,
+        completed_tasks: totalDeliveries,
+        today: todayEarned,
+        this_month: monthEarned,
+        tasks: tasksList,
+        items: tasksList,
         available_balance,
         pending_balance,
         avg_per_day,
